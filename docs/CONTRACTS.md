@@ -20,9 +20,9 @@
 | Lists | Long lists take `?limit=` (default 50, max 200) and `?cursor=`; response `{ items, nextCursor }`. Short fixed lists (5 Hubs) return a plain array |
 | Errors | Always `{ "error": { code, message, nextActions[], alternatives?[], details? } }` — see ARCHITECTURE §4.4. Every 4xx has a human `message` and at least one `nextActions` entry (NFR-05) |
 | Validation | Bad/missing field → `400 VALIDATION_ERROR` with `details.field`; no state change (NFR-13) |
-| Status codes | `200` read/update, `201` created, `202` accepted (async), `204` no body, `400` bad input, `401` no/bad token, `403` wrong role, `404` not found / not yours, `409` business rule, state or race conflict |
+| Status codes | `200` read/update, `201` created, `202` accepted (async), `204` no body, `400` bad input, `401` no/bad token, `403` wrong role, `404` not found / not yours, `409` business rule, state or race conflict, `500` unexpected server error (generic message, no internals), `503` database unreachable (`/health` only) |
 
-**Common error codes:** `VALIDATION_ERROR`, `UNAUTHENTICATED`, `INVALID_CREDENTIALS`, `FORBIDDEN`, `NOT_FOUND`, `IDENTIFIER_TAKEN`, `RESOURCE_TAKEN`, `ACTIVE_RENTAL_EXISTS`, `LOW_BATTERY`, `HOLD_EXPIRED`, `HUB_FULL`, `NO_CAPACITY`, `CLASS_MISMATCH`, `INVALID_STATE_TRANSITION`, `SESSION_PROTECTED`, `CAPACITY_EXCEEDED`, `NOT_ELIGIBLE`, `HAS_ACTIVE_BOOKING`, `STALE_PACKET`, `LIVE_STATE_CONFLICT`, `CONFIRM_TOKEN_INVALID`.
+**Common error codes:** `VALIDATION_ERROR`, `UNAUTHENTICATED`, `INVALID_CREDENTIALS`, `FORBIDDEN`, `NOT_FOUND`, `IDENTIFIER_TAKEN`, `RESOURCE_TAKEN`, `ACTIVE_RENTAL_EXISTS`, `LOW_BATTERY`, `HOLD_EXPIRED`, `HUB_FULL`, `NO_CAPACITY`, `CLASS_MISMATCH`, `INVALID_STATE_TRANSITION`, `SESSION_PROTECTED`, `CAPACITY_EXCEEDED`, `NOT_ELIGIBLE`, `HAS_ACTIVE_BOOKING`, `STALE_PACKET`, `LIVE_STATE_CONFLICT`, `CONFIRM_TOKEN_INVALID`, `INTERNAL_ERROR` (500), `DB_UNAVAILABLE` (503).
 
 ---
 

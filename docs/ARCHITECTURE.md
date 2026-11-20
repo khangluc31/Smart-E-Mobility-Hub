@@ -164,9 +164,11 @@ export const transitions = {
   rentalVehicle: { AVAILABLE: ['RESERVED','IN_TRANSIT','FAULTY'], RESERVED: ['AVAILABLE','IN_USE','FAULTY'], … },
   …
 } as const;
-export function assertTransition(entity: Entity, from: string, to: string): void; // throws InvalidStateTransitionError (409) + audit row
+export function assertTransition(entity: Entity, from: string, to: string): void; // pure: throws InvalidStateTransitionError (409)
 ```
-Services call `assertTransition` before every status update. `stateMachine.test.ts` checks every row of SPEC §4 and a sample of forbidden moves.
+Services call `assertTransition` before every status update (including the system tables in SPEC §4: alert, simulation run, recommendation). `stateMachine.test.ts` checks every row of SPEC §4 and a sample of forbidden moves.
+
+**Audit of invalid attempts (D-22):** `assertTransition` writes nothing — it usually runs inside a transaction that the throw rolls back. `errorHandler` in `core/errors.ts` sees the `InvalidStateTransitionError` and writes the `INVALID_TRANSITION` audit row with plain `db`, after the rollback. `requireRole` writes `SECURITY_DENIED` the same way.
 
 ### 4.3 Validation
 
@@ -233,7 +235,7 @@ Prisma models use PascalCase and `@@map("snake_case")`; **fields are not `@map`p
 | `user` | id, identifier (unique), passwordHash, displayName, role `STUDENT\|OPERATOR`, mustChangePassword, createdAt |
 | `hub` | id (`metro`, `dorm`, `campus-a`, `campus-b`, `service`), name, location, lastTelemetryAt?, createdAt |
 | `hub_threshold` | hubId, vehicleClass, minAvailable, maxAvailable (unique hubId+class) — BR-15 |
-| `hub_redirect` | id, fromHubId, toHubId, activeUntil, createdBy, recommendationId? — applied REDIRECT recommendations (D-12) |
+| `hub_redirect` | id, fromHubId, toHubId, activeUntil, createdById, recommendationId? — applied REDIRECT recommendations (D-12) |
 | `setting` | key (PK), value Json — e.g. `charging.weights` (FR-48) |
 
 **Resources**

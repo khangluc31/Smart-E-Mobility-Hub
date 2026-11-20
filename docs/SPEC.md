@@ -85,6 +85,18 @@ All values live in `backend/src/core/config.ts`, loaded from env with these defa
 | `SIM_INTERVAL_MIN` | 15 (P) | FR-56 |
 | `CHARGE_RATE_PCT_PER_MIN` | MOTORCYCLE 1.0, CAR 0.5 (D-09) | design |
 | `DEMO_TIME_SCALE` | 1 (D-10) | design |
+| `URGENCY_HORIZON_MIN` | 240 (D-08 urgency scale) | design |
+| `WAITING_FULL_MIN` | 120 (D-08 waiting scale) | design |
+| `MANUAL_ADJUST_STEP` | 1000 (FR-52 promote/defer, UC-22 A1 requeue) | design |
+| `CHARGE_AFTER_RETURN_MIN` | 30 (D-13) | design |
+| `CONFIRM_TOKEN_TTL_MIN` | 5 (D-20) | design |
+| `BATTERY_DRAIN_PCT_PER_MIN` | 0.3 (generator, ARCHITECTURE §7.2) | design |
+| `FAULT_PROBABILITY` | 0 (generator) | design |
+| `PARKING_MAX_WINDOW_H` | 12 (CONTRACTS §5) | design |
+| `ALTERNATIVE_SLOTS_COUNT` | 3 (FR-21 "next free starts") | design |
+| `LIST_LIMIT_DEFAULT` / `LIST_LIMIT_MAX` | 50 / 200 (CONTRACTS §0) | design |
+
+Env names for compound values: `CHARGING_WEIGHT_BATTERY`, `CHARGING_WEIGHT_URGENCY`, `CHARGING_WEIGHT_WAITING`, `CHARGE_RATE_MOTORCYCLE`, `CHARGE_RATE_CAR`. Every other key uses its own name as the env variable.
 
 ---
 
@@ -101,6 +113,14 @@ Implement each as an explicit transition table in `backend/src/core/stateMachine
 | Charging point | `AVAILABLE`, `CHARGING`, `FAULTY` | AVAILABLE→CHARGING→AVAILABLE · any→FAULTY · FAULTY→AVAILABLE |
 | Incident | `REPORTED`, `IN_MAINTENANCE`, `RESOLVED` | REPORTED→IN_MAINTENANCE→RESOLVED (resolution notes required) |
 | Redistribution task | `PROPOSED`, `APPROVED`, `IN_PROGRESS`, `COMPLETED`, `CANCELLED`, `FAILED` | PROPOSED→APPROVED→IN_PROGRESS→COMPLETED · PROPOSED/APPROVED→CANCELLED · IN_PROGRESS→FAILED |
+
+**System tables** (not in report Table 2.6; same `assertTransition` rule so no status is ever written by hand)
+
+| Entity | States | Allowed transitions |
+|---|---|---|
+| Alert | `OPEN`, `ACKNOWLEDGED`, `DISMISSED`, `RESOLVED` | OPEN→ACKNOWLEDGED · OPEN→DISMISSED (FR-34) · OPEN→RESOLVED (condition gone, UC-20 A2) |
+| Simulation run | `RUNNING`, `COMPLETED`, `FAILED`, `INCOMPLETE` | RUNNING→COMPLETED · RUNNING→FAILED · RUNNING→INCOMPLETE (time limit, FR-55) |
+| Recommendation | `PENDING`, `APPLIED`, `DISMISSED`, `BLOCKED` | PENDING→APPLIED · PENDING→DISMISSED · PENDING→BLOCKED (live re-check failed, UC-33 E1) |
 
 Notes
 - `FREE→OCCUPIED` and `UNAVAILABLE→FREE` for Parking space, and `LOW_BATTERY→AVAILABLE` / `FAULTY→LOW_BATTERY` for Rental vehicle, are implied by UC-06, UC-22 and BR-02 but missing from Table 2.6 — added here (D-11).
@@ -262,6 +282,7 @@ This is the canonical list. `ARCHITECTURE.md` §16 gives the trade-offs behind e
 | D-19 | Redistribution picks and locks the actual vehicles when the task moves to **In progress**, and reserves the destination FLEET spaces at the same moment. At creation/approval only the counts are checked. | Avoids holding vehicles away from students while a task waits for approval. |
 | D-20 | Applying a simulation recommendation is two calls: `preview` (shows the exact live changes, returns a one-time confirm token) then `apply` with that token (FR-58, UC-33 E2). | Enforces the "secondary confirmation" in the API, not just in the UI. |
 | D-21 | Every state and vocabulary column is a **Prisma enum** (a Postgres enum type) with exactly the §4 / CONTRACTS §1 values. `types/enums.ts` mirrors them as plain TS unions (copied to the frontend), with a type-level check that they match the Prisma enums. | The database itself refuses a misspelled status, on top of `assertTransition()` (BR-05). |
+| D-22 | `assertTransition()` is pure and only throws. The **error handler** writes the security audit row for an invalid transition with the plain DB client, after the failed transaction has rolled back. Role denials (`requireRole`) are audited the same way. | An audit row written inside the failing transaction would be rolled back with it, so BR-05's "log the attempt" would silently never happen. |
 
 ## 9. Traceability
 
