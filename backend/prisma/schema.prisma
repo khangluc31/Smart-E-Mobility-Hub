@@ -1,5 +1,6 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
+// Smart E-Mobility Hub — data model (ARCHITECTURE §5.1, constraints in §5.2).
+// Models are PascalCase with @@map("snake_case"); fields are NOT @map'ped, so
+// columns stay camelCase (the §5.2 raw SQL quotes them, e.g. "userId").
 
 generator client {
   provider = "prisma-client-js"
@@ -10,4 +11,681 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// No models yet — they arrive in T-02.
+// ---------------------------------------------------------------------------
+// Enums (D-21) — values exactly as CONTRACTS §1 / ARCHITECTURE §5.1
+// ---------------------------------------------------------------------------
+
+enum Role {
+  STUDENT
+  OPERATOR
+}
+
+enum VehicleClass {
+  MOTORCYCLE
+  CAR
+}
+
+enum RentalVehicleType {
+  E_BICYCLE
+  E_MOTORCYCLE
+}
+
+enum PrivateEvType {
+  E_MOTORCYCLE
+  CAR
+}
+
+enum RentalVehicleStatus {
+  AVAILABLE
+  RESERVED
+  IN_USE
+  LOW_BATTERY
+  IN_TRANSIT
+  FAULTY
+}
+
+enum ReservationStatus {
+  CONFIRMED
+  ACTIVE
+  COMPLETED
+  CANCELLED
+  EXPIRED
+}
+
+enum ParkingSpaceStatus {
+  FREE
+  RESERVED
+  OCCUPIED
+  UNAVAILABLE
+}
+
+enum ParkingPool {
+  FLEET
+  PUBLIC
+}
+
+enum ChargingPointStatus {
+  AVAILABLE
+  CHARGING
+  FAULTY
+}
+
+enum ChargingRequestStatus {
+  QUEUED
+  SCHEDULED
+  CHARGING
+  COMPLETED
+  CANCELLED
+}
+
+enum ChargingMode {
+  QUEUE
+  ADVANCE
+}
+
+enum ChargingEndReason {
+  TARGET_REACHED
+  USER_STOP
+  POINT_FAILURE
+  VEHICLE_FAULT
+}
+
+enum IncidentStatus {
+  REPORTED
+  IN_MAINTENANCE
+  RESOLVED
+}
+
+enum IncidentResourceType {
+  RENTAL_VEHICLE
+  PARKING_SPACE
+  CHARGING_POINT
+}
+
+enum IncidentCategory {
+  VEHICLE_FAULT
+  BATTERY_FAULT
+  CHARGER_FAULT
+  ELECTRICAL
+  EMERGENCY_DISCONNECT
+  DAMAGE
+  OBSTRUCTION
+  OTHER
+}
+
+enum IncidentSource {
+  OPERATOR
+  STUDENT
+  TELEMETRY
+}
+
+enum AlertType {
+  NEAR_CAPACITY
+  LOW_BATTERY
+  FAULT
+  STALLED_FEED
+  SHORTAGE
+  SURPLUS
+}
+
+enum AlertStatus {
+  OPEN
+  ACKNOWLEDGED
+  DISMISSED
+  RESOLVED
+}
+
+enum RedistributionStatus {
+  PROPOSED
+  APPROVED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  FAILED
+}
+
+enum SimRunStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+  INCOMPLETE
+}
+
+enum RecommendationType {
+  REDISTRIBUTE
+  CHARGING_ADJUST
+  REDIRECT
+}
+
+enum RecommendationStatus {
+  PENDING
+  APPLIED
+  DISMISSED
+  BLOCKED
+}
+
+enum ChargingVehicleKind {
+  RENTAL
+  PRIVATE
+}
+
+enum VehicleReservationEndReason {
+  RETURNED
+  CANCELLED
+  EXPIRED
+  INCIDENT
+}
+
+enum ImpactBookingType {
+  VEHICLE_RESERVATION
+  PARKING_RESERVATION
+  CHARGING_REQUEST
+}
+
+enum ImpactOutcome {
+  REASSIGNED
+  CANCELLED
+  ENDED
+}
+
+enum RedistributionOrigin {
+  MANUAL
+  SIMULATION
+}
+
+// ---------------------------------------------------------------------------
+// Accounts and Hubs
+// ---------------------------------------------------------------------------
+
+model User {
+  id                 String   @id @default(cuid())
+  identifier         String   @unique
+  passwordHash       String
+  displayName        String
+  role               Role     @default(STUDENT)
+  mustChangePassword Boolean  @default(false)
+  createdAt          DateTime @default(now()) @db.Timestamptz(3)
+
+  vehicleReservations    VehicleReservation[]
+  parkingReservations    ParkingReservation[]
+  privateEvs             PrivateEv[]
+  notifications          Notification[]
+  chargingRequestsMade   ChargingRequest[]    @relation("ChargingRequestedBy")
+  chargingRequestsOwned  ChargingRequest[]    @relation("ChargingOwner")
+  redistributionTasks    RedistributionTask[]
+  simScenarios           SimScenario[]
+  closedAlerts           Alert[]
+  appliedRecommendations SimRecommendation[]
+  reportedIncidents      Incident[]
+  incidentReports        IncidentReport[]
+  incidentImpacts        IncidentImpact[]
+  hubRedirects           HubRedirect[]
+  idempotencyKeys        IdempotencyKey[]
+
+  @@map("user")
+}
+
+model Hub {
+  id              String    @id
+  name            String
+  location        String
+  lastTelemetryAt DateTime? @db.Timestamptz(3)
+  createdAt       DateTime  @default(now()) @db.Timestamptz(3)
+
+  thresholds           HubThreshold[]
+  rentalVehicles       RentalVehicle[]
+  parkingSpaces        ParkingSpace[]
+  chargingPoints       ChargingPoint[]
+  vehicleReservations  VehicleReservation[] @relation("VehicleReservationHub")
+  returnedReservations VehicleReservation[] @relation("VehicleReservationReturnHub")
+  parkingReservations  ParkingReservation[]
+  chargingRequests     ChargingRequest[]
+  incidents            Incident[]
+  redirectsFrom        HubRedirect[]        @relation("HubRedirectFrom")
+  redirectsTo          HubRedirect[]        @relation("HubRedirectTo")
+  tasksFrom            RedistributionTask[] @relation("RedistributionSource")
+  tasksTo              RedistributionTask[] @relation("RedistributionDest")
+  alerts               Alert[]
+
+  @@map("hub")
+}
+
+model HubThreshold {
+  id           String       @id @default(cuid())
+  hubId        String
+  vehicleClass VehicleClass
+  minAvailable Int
+  maxAvailable Int
+
+  hub Hub @relation(fields: [hubId], references: [id])
+
+  @@unique([hubId, vehicleClass])
+  @@map("hub_threshold")
+}
+
+model HubRedirect {
+  id               String   @id @default(cuid())
+  fromHubId        String
+  toHubId          String
+  activeUntil      DateTime @db.Timestamptz(3)
+  createdById      String
+  recommendationId String?
+
+  fromHub        Hub                @relation("HubRedirectFrom", fields: [fromHubId], references: [id])
+  toHub          Hub                @relation("HubRedirectTo", fields: [toHubId], references: [id])
+  createdBy      User               @relation(fields: [createdById], references: [id])
+  recommendation SimRecommendation? @relation(fields: [recommendationId], references: [id])
+
+  @@map("hub_redirect")
+}
+
+model Setting {
+  key   String @id
+  value Json   @default("{}")
+
+  @@map("setting")
+}
+
+// ---------------------------------------------------------------------------
+// Resources
+// ---------------------------------------------------------------------------
+
+model RentalVehicle {
+  id             String              @id
+  hubId          String
+  type           RentalVehicleType
+  vehicleClass   VehicleClass        @default(MOTORCYCLE)
+  status         RentalVehicleStatus
+  batteryPct     Float
+  parkingSpaceId String?             @unique
+  updatedAt      DateTime            @updatedAt @db.Timestamptz(3)
+
+  hub          Hub           @relation(fields: [hubId], references: [id])
+  parkingSpace ParkingSpace? @relation(fields: [parkingSpaceId], references: [id])
+
+  vehicleReservations VehicleReservation[]
+  chargingRequests    ChargingRequest[]
+  redistributionLinks RedistributionTaskVehicle[]
+
+  @@index([hubId, status])
+  @@map("rental_vehicle")
+}
+
+model PrivateEv {
+  id                 String        @id @default(cuid())
+  ownerId            String
+  type               PrivateEvType
+  vehicleClass       VehicleClass
+  label              String
+  batteryCapacityKwh Float
+  batteryPct         Float
+  deletedAt          DateTime?     @db.Timestamptz(3)
+
+  owner User @relation(fields: [ownerId], references: [id])
+
+  parkingReservations ParkingReservation[]
+  chargingRequests    ChargingRequest[]
+
+  @@map("private_ev")
+}
+
+model ParkingSpace {
+  id                String             @id
+  hubId             String
+  vehicleClass      VehicleClass
+  pool              ParkingPool
+  status            ParkingSpaceStatus
+  reservedForTaskId String?
+
+  hub             Hub                 @relation(fields: [hubId], references: [id])
+  reservedForTask RedistributionTask? @relation(fields: [reservedForTaskId], references: [id])
+
+  occupant            RentalVehicle?
+  parkingReservations ParkingReservation[]
+
+  @@index([hubId, vehicleClass, pool, status])
+  @@map("parking_space")
+}
+
+model ChargingPoint {
+  id           String              @id
+  hubId        String
+  vehicleClass VehicleClass
+  status       ChargingPointStatus
+
+  hub Hub @relation(fields: [hubId], references: [id])
+
+  chargingRequests ChargingRequest[]
+
+  @@map("charging_point")
+}
+
+// ---------------------------------------------------------------------------
+// Bookings
+// ---------------------------------------------------------------------------
+
+model VehicleReservation {
+  id              String                       @id @default(cuid())
+  userId          String
+  rentalVehicleId String
+  hubId           String
+  status          ReservationStatus
+  createdAt       DateTime                     @default(now()) @db.Timestamptz(3)
+  expiresAt       DateTime                     @db.Timestamptz(3)
+  pickedUpAt      DateTime?                    @db.Timestamptz(3)
+  returnedAt      DateTime?                    @db.Timestamptz(3)
+  returnHubId     String?
+  startBatteryPct Float?
+  endBatteryPct   Float?
+  endReason       VehicleReservationEndReason?
+  idempotencyKey  String?
+
+  user          User          @relation(fields: [userId], references: [id])
+  rentalVehicle RentalVehicle @relation(fields: [rentalVehicleId], references: [id])
+  hub           Hub           @relation("VehicleReservationHub", fields: [hubId], references: [id])
+  returnHub     Hub?          @relation("VehicleReservationReturnHub", fields: [returnHubId], references: [id])
+
+  @@index([status, expiresAt])
+  @@map("vehicle_reservation")
+}
+
+model ParkingReservation {
+  id             String            @id @default(cuid())
+  userId         String
+  parkingSpaceId String
+  hubId          String
+  vehicleClass   VehicleClass
+  privateEvId    String?
+  windowStart    DateTime          @db.Timestamptz(3)
+  windowEnd      DateTime          @db.Timestamptz(3)
+  status         ReservationStatus
+  claimedAt      DateTime?         @db.Timestamptz(3)
+  expiresAt      DateTime          @db.Timestamptz(3)
+  bookingGroupId String?
+  idempotencyKey String?
+
+  user         User         @relation(fields: [userId], references: [id])
+  parkingSpace ParkingSpace @relation(fields: [parkingSpaceId], references: [id])
+  hub          Hub          @relation(fields: [hubId], references: [id])
+  privateEv    PrivateEv?   @relation(fields: [privateEvId], references: [id])
+
+  @@index([status, windowStart])
+  @@index([status, expiresAt])
+  @@map("parking_reservation")
+}
+
+model ChargingRequest {
+  id              String                @id @default(cuid())
+  requestedById   String
+  ownerId         String?
+  vehicleKind     ChargingVehicleKind
+  rentalVehicleId String?
+  privateEvId     String?
+  vehicleClass    VehicleClass
+  hubId           String
+  mode            ChargingMode
+  status          ChargingRequestStatus
+  targetPct       Float
+  startPct        Float
+  currentPct      Float
+  desiredTime     DateTime              @default(now()) @db.Timestamptz(3)
+  neededBy        DateTime?             @db.Timestamptz(3)
+  chargingPointId String?
+  slotStart       DateTime?             @db.Timestamptz(3)
+  slotEnd         DateTime?             @db.Timestamptz(3)
+  startedAt       DateTime?             @db.Timestamptz(3)
+  endedAt         DateTime?             @db.Timestamptz(3)
+  endReason       ChargingEndReason?
+  finalPct        Float?
+  manualAdjust    Float                 @default(0)
+  bookingGroupId  String?
+  createdAt       DateTime              @default(now()) @db.Timestamptz(3)
+
+  requestedBy   User           @relation("ChargingRequestedBy", fields: [requestedById], references: [id])
+  owner         User?          @relation("ChargingOwner", fields: [ownerId], references: [id])
+  rentalVehicle RentalVehicle? @relation(fields: [rentalVehicleId], references: [id])
+  privateEv     PrivateEv?     @relation(fields: [privateEvId], references: [id])
+  chargingPoint ChargingPoint? @relation(fields: [chargingPointId], references: [id])
+  hub           Hub            @relation(fields: [hubId], references: [id])
+
+  @@index([hubId, status])
+  @@map("charging_request")
+}
+
+model IdempotencyKey {
+  key            String
+  userId         String
+  endpoint       String
+  responseStatus Int
+  responseBody   Json     @default("{}")
+  createdAt      DateTime @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@id([key, userId])
+  @@map("idempotency_key")
+}
+
+// ---------------------------------------------------------------------------
+// Operations
+// ---------------------------------------------------------------------------
+
+model Incident {
+  id              String               @id @default(cuid())
+  resourceType    IncidentResourceType
+  resourceId      String
+  hubId           String
+  vehicleClass    VehicleClass
+  category        IncidentCategory
+  notes           String
+  source          IncidentSource
+  reportedById    String?
+  status          IncidentStatus
+  resolutionNotes String?
+  createdAt       DateTime             @default(now()) @db.Timestamptz(3)
+  inMaintenanceAt DateTime?            @db.Timestamptz(3)
+  resolvedAt      DateTime?            @db.Timestamptz(3)
+
+  hub        Hub   @relation(fields: [hubId], references: [id])
+  reportedBy User? @relation(fields: [reportedById], references: [id])
+
+  reports IncidentReport[]
+  impacts IncidentImpact[]
+
+  @@index([hubId, status, createdAt])
+  @@map("incident")
+}
+
+model IncidentReport {
+  id           String         @id @default(cuid())
+  incidentId   String
+  source       IncidentSource
+  reportedById String?
+  notes        String
+  createdAt    DateTime       @default(now()) @db.Timestamptz(3)
+
+  incident   Incident @relation(fields: [incidentId], references: [id])
+  reportedBy User?    @relation(fields: [reportedById], references: [id])
+
+  @@map("incident_report")
+}
+
+model IncidentImpact {
+  id            String            @id @default(cuid())
+  incidentId    String
+  bookingType   ImpactBookingType
+  bookingId     String
+  userId        String?
+  outcome       ImpactOutcome
+  newResourceId String?
+
+  incident Incident @relation(fields: [incidentId], references: [id])
+  user     User?    @relation(fields: [userId], references: [id])
+
+  @@map("incident_impact")
+}
+
+model Alert {
+  id           String        @id @default(cuid())
+  type         AlertType
+  hubId        String
+  vehicleClass VehicleClass?
+  resourceIds  String[]
+  metric       Json          @default("{}")
+  message      String
+  status       AlertStatus   @default(OPEN)
+  dedupeKey    String
+  createdAt    DateTime      @default(now()) @db.Timestamptz(3)
+  lastSeenAt   DateTime      @default(now()) @db.Timestamptz(3)
+  closedAt     DateTime?     @db.Timestamptz(3)
+  closedById   String?
+
+  hub      Hub   @relation(fields: [hubId], references: [id])
+  closedBy User? @relation(fields: [closedById], references: [id])
+
+  @@index([status, hubId])
+  @@map("alert")
+}
+
+model RedistributionTask {
+  id               String               @id @default(cuid())
+  sourceHubId      String
+  destHubId        String
+  vehicleClass     VehicleClass
+  vehicleType      RentalVehicleType?
+  count            Int
+  status           RedistributionStatus
+  override         Boolean              @default(false)
+  reason           String?
+  origin           RedistributionOrigin
+  recommendationId String?
+  createdById      String
+  createdAt        DateTime             @default(now()) @db.Timestamptz(3)
+  approvedAt       DateTime?            @db.Timestamptz(3)
+  startedAt        DateTime?            @db.Timestamptz(3)
+  completedAt      DateTime?            @db.Timestamptz(3)
+  failedAt         DateTime?            @db.Timestamptz(3)
+  cancelledAt      DateTime?            @db.Timestamptz(3)
+  updatedAt        DateTime             @updatedAt @db.Timestamptz(3)
+
+  sourceHub      Hub                @relation("RedistributionSource", fields: [sourceHubId], references: [id])
+  destHub        Hub                @relation("RedistributionDest", fields: [destHubId], references: [id])
+  createdBy      User               @relation(fields: [createdById], references: [id])
+  recommendation SimRecommendation? @relation(fields: [recommendationId], references: [id])
+
+  vehicles       RedistributionTaskVehicle[]
+  reservedSpaces ParkingSpace[]
+
+  @@map("redistribution_task")
+}
+
+model RedistributionTaskVehicle {
+  taskId          String
+  rentalVehicleId String
+
+  task          RedistributionTask @relation(fields: [taskId], references: [id])
+  rentalVehicle RentalVehicle      @relation(fields: [rentalVehicleId], references: [id])
+
+  @@id([taskId, rentalVehicleId])
+  @@map("redistribution_task_vehicle")
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  type      String
+  title     String
+  body      String
+  data      Json      @default("{}")
+  readAt    DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, readAt, createdAt])
+  @@map("notification")
+}
+
+model AuditLog {
+  id         BigInt   @id @default(autoincrement())
+  at         DateTime @default(now()) @db.Timestamptz(3)
+  actorId    String?
+  actorRole  String?
+  action     String
+  entityType String
+  entityIds  String[]
+  reason     String?
+  details    Json     @default("{}")
+
+  @@index([entityType, at])
+  @@map("audit_log")
+}
+
+model TelemetryReject {
+  id              String    @id @default(cuid())
+  hubId           String?
+  packetTimestamp DateTime? @db.Timestamptz(3)
+  reason          String
+  payload         Json      @default("{}")
+  receivedAt      DateTime  @default(now()) @db.Timestamptz(3)
+
+  @@map("telemetry_reject")
+}
+
+// ---------------------------------------------------------------------------
+// Simulation (never live data)
+// ---------------------------------------------------------------------------
+
+model SimScenario {
+  id          String   @id @default(cuid())
+  name        String
+  conditions  Json
+  horizonH    Int
+  seed        Int
+  createdById String
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  createdBy User     @relation(fields: [createdById], references: [id])
+  runs      SimRun[]
+
+  @@map("sim_scenario")
+}
+
+model SimRun {
+  id         String       @id @default(cuid())
+  scenarioId String
+  status     SimRunStatus
+  snapshot   Json         @default("{}")
+  results    Json         @default("{}")
+  startedAt  DateTime     @default(now()) @db.Timestamptz(3)
+  finishedAt DateTime?    @db.Timestamptz(3)
+  durationMs Int?
+  savedName  String?
+
+  scenario SimScenario @relation(fields: [scenarioId], references: [id])
+
+  recommendations SimRecommendation[]
+
+  @@map("sim_run")
+}
+
+model SimRecommendation {
+  id                    String               @id @default(cuid())
+  runId                 String
+  type                  RecommendationType
+  payload               Json                 @default("{}")
+  projectedImpact       Json                 @default("{}")
+  status                RecommendationStatus @default(PENDING)
+  confirmToken          String?
+  confirmTokenExpiresAt DateTime?            @db.Timestamptz(3)
+  appliedById           String?
+  appliedAt             DateTime?            @db.Timestamptz(3)
+
+  run       SimRun @relation(fields: [runId], references: [id])
+  appliedBy User?  @relation(fields: [appliedById], references: [id])
+
+  hubRedirects        HubRedirect[]
+  redistributionTasks RedistributionTask[]
+
+  @@map("sim_recommendation")
+}

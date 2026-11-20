@@ -4,6 +4,8 @@ export default defineConfig({
   test: {
     environment: 'node',
     globals: true,
+    globalSetup: ['tests/globalSetup.ts'],
+    fileParallelism: false,
     env: {
       DATABASE_URL: 'postgresql://postgres:postgres@localhost:5432/emobility_test',
       PORT: '3001',
