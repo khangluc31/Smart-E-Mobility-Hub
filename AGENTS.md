@@ -97,8 +97,8 @@ npm run lint && npm run typecheck   # root, both apps
 | Role | Tool | Does | Doesn't |
 |---|---|---|---|
 | Orchestrator | Claude Opus 5.5 (Claude Code) | Writes docs and tickets, reviews at milestones, designs the hard parts | Write production code directly |
-| Writer | Opus 4.6 (Antigravity) | Implements **one ticket** on its branch, with tests | Edit files outside the ticket; change docs/schema without saying so |
-| Checker | Sonnet 4.6 (Antigravity, separate conversation) | Writes tests **from the ticket and SPEC before reading the code**, runs lint/typecheck/tests, reports PASS/FAIL with reasons | Fix the code itself (it reports; the writer fixes) |
+| Writer | Opus 4.6 (Claude Code, new session per ticket) | Implements **one ticket** on its branch, with tests | Edit files outside the ticket; change docs/schema without saying so |
+| Checker | Sonnet 4.6 (Claude Code, separate session from the writer) | Writes tests **from the ticket and SPEC before reading the code**, runs lint/typecheck/tests, reports PASS/FAIL with reasons | Fix the code itself (it reports; the writer fixes) |
 | Helper | Haiku 5.5 (Claude Code) | Search the codebase, seed data, boilerplate, `AI_USAGE_LOG.md` lines | Business logic |
 | Auditor | Gemini Flash (Antigravity) | At milestones, compares the whole repo to SPEC §6 / §9 and lists gaps | Change code |
 
