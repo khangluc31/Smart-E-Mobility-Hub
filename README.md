@@ -122,6 +122,7 @@ smart-emobility-hub/
 |  |- pull_request_template.md    [M1] owner, FR IDs, tests, AI Log ticked
 |
 |- docs/
+|  |- SPEC.md  
 |  |- ARCHITECTURE.md             [M1] decisions + trade-offs + component diagram (report 3.1)
 |  |- CONTRACTS.md                [M1] every endpoint: URL, request, response, owner, FR IDs
 |  |- PART2_UPDATES.md            [M1→M3] edits needed in the Part 2 report
