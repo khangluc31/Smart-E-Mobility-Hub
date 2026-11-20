@@ -436,9 +436,10 @@ Every 5 s, for each Hub not in "stalled" demo mode, reads current state and prod
 | Route | Who | Purpose |
 |---|---|---|
 | `POST /api/telemetry` | header `X-Telemetry-Key` | External / mock sensor feed (same `ingest()`) |
-| `POST /api/telemetry/demo/stall` `{hubId, seconds}` | Operator | Pause one Hub's feed → demo FR-03 / FR-35 |
-| `POST /api/telemetry/demo/fault` `{resourceType, resourceId, faultCode}` | Operator | Next packet carries a fault → demo FR-36 |
-| `POST /api/telemetry/demo/battery` `{vehicleId, batteryPct}` | Operator | Force a battery level → demo FR-33 low battery |
+| `POST /api/ops/telemetry/demo/stall` `{hubId, seconds}` | Operator | Pause one Hub's feed → demo FR-03 / FR-35 |
+| `POST /api/ops/telemetry/demo/fault` `{resourceType, resourceId, faultCode}` | Operator | Next packet carries a fault → demo FR-36 |
+| `POST /api/ops/telemetry/demo/battery` `{vehicleId, batteryPct}` | Operator | Force a battery level → demo FR-33 low battery |
+| `GET /api/ops/telemetry/rejects` | Operator | List rejected packets → demo NFR-25 |
 
 `scripts/mock-sensor.ts` posts the same packets to `/api/telemetry` to show NFR-24.
 
@@ -527,7 +528,7 @@ Running sessions are never touched (BR-06).
 
 **Lifecycle (FR-41):** REPORTED → IN_MAINTENANCE → RESOLVED (notes required, else 400). On RESOLVED: vehicle → AVAILABLE (≥ 20%) or LOW_BATTERY, space → FREE, point → AVAILABLE. Each step audited.
 
-**Log search (FR-42):** `GET /api/incidents?hubId&resourceId&vehicleClass&category&status&from&to` with indexes on `(hubId, status, createdAt)`.
+**Log search (FR-42):** `GET /api/ops/incidents?hubId&resourceId&vehicleClass&category&status&from&to` with indexes on `(hubId, status, createdAt)`.
 
 ---
 
@@ -551,13 +552,13 @@ Every step audited. `detectImbalance(hubId)` (FR-43) lives here; monitoring call
 ### 12.1 Flow
 
 ```
-POST /api/simulation/scenarios        define (FR-54)
-POST /api/simulation/runs {scenarioId} → snapshot.ts (read-only) → engine.run() → recommend() → sim_run + sim_recommendation (FR-53/55/57)
-GET  /api/simulation/runs/:id         results (FR-56)
-GET  /api/simulation/recommendations/:id/preview  → exact live changes + confirmToken (5 min)
-POST /api/simulation/recommendations/:id/apply {confirmToken} → re-validate live → create live task / change weights / add hub_redirect (FR-58, D-20)
-POST /api/simulation/recommendations/:id/dismiss
-GET  /api/simulation/compare?a=&b=    (FR-59)
+POST /api/ops/simulation/scenarios        define (FR-54)
+POST /api/ops/simulation/runs {scenarioId} → snapshot.ts (read-only) → engine.run() → recommend() → sim_run + sim_recommendation (FR-53/55/57)
+GET  /api/ops/simulation/runs/:id         results (FR-56)
+GET  /api/ops/simulation/recommendations/:id/preview  → exact live changes + confirmToken (5 min)
+POST /api/ops/simulation/recommendations/:id/apply {confirmToken} → re-validate live → create live task / change weights / add hub_redirect (FR-58, D-20)
+POST /api/ops/simulation/recommendations/:id/dismiss
+GET  /api/ops/simulation/compare?runA=&runB=    (FR-59)
 ```
 
 ### 12.2 Snapshot (`simulation/snapshot.ts`, M1)
