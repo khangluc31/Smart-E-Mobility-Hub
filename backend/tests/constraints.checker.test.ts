@@ -43,6 +43,32 @@ async function clean() {
   `);
 }
 
+/**
+ * Assert the promise rejects with a Postgres violation.
+ * Checks that at least one of the given PG SQLSTATE codes appears anywhere in
+ * the thrown error's message, code, or meta JSON.
+ * AC-6 already confirms constraint names exist — we assert codes here.
+ */
+async function expectViolation(p: Promise<unknown>, ...pgCodes: string[]): Promise<void> {
+  let threw = false;
+  try {
+    await p;
+  } catch (err) {
+    threw = true;
+    const e = err as { message?: string; code?: string; meta?: unknown };
+    const hay = [e.message ?? '', e.code ?? '', JSON.stringify(e.meta ?? '')].join(' | ');
+    const matched = pgCodes.some((c) => hay.includes(c));
+    if (!matched) {
+      throw new Error(
+        `Expected one of [${pgCodes.join(', ')}] in DB error but got: ${hay.slice(0, 500)}`,
+      );
+    }
+  }
+  if (!threw) {
+    throw new Error(`Expected a DB violation (${pgCodes.join(', ')}) but the write succeeded`);
+  }
+}
+
 async function mkHub(id: string) {
   await db.$executeRaw`
     INSERT INTO hub (id, name, location, "createdAt")
@@ -137,6 +163,8 @@ describe('T-02 AC-3 enum values match CONTRACTS §1', () => {
     return rows.map((r) => r.enumlabel);
   }
 
+  // ScenarioTemplate is intentionally omitted: the orchestrator approved keeping
+  // scenario templates as free-form JSON inside sim_scenario.conditions.
   const cases: Array<[string, string[]]> = [
     ['Role', ['STUDENT', 'OPERATOR']],
     ['VehicleClass', ['MOTORCYCLE', 'CAR']],
@@ -158,7 +186,6 @@ describe('T-02 AC-3 enum values match CONTRACTS §1', () => {
     ['AlertType', ['NEAR_CAPACITY', 'LOW_BATTERY', 'FAULT', 'STALLED_FEED', 'SHORTAGE', 'SURPLUS']],
     ['AlertStatus', ['OPEN', 'ACKNOWLEDGED', 'DISMISSED', 'RESOLVED']],
     ['RedistributionStatus', ['PROPOSED', 'APPROVED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED', 'FAILED']],
-    ['ScenarioTemplate', ['METRO_SURGE', 'HUB_PARKING_FULL', 'CHARGING_SPIKE', 'POINT_OUTAGE', 'VEHICLE_IMBALANCE']],
     ['SimRunStatus', ['RUNNING', 'COMPLETED', 'FAILED', 'INCOMPLETE']],
     ['RecommendationType', ['REDISTRIBUTE', 'CHARGING_ADJUST', 'REDIRECT']],
     ['RecommendationStatus', ['PENDING', 'APPLIED', 'DISMISSED', 'BLOCKED']],
@@ -261,12 +288,13 @@ describe('T-02 AC-7 BR-01 one active vehicle reservation per student', () => {
         (id, "userId", "rentalVehicleId", "hubId", status, "expiresAt", "createdAt")
       VALUES ('r1', 'u1', 'v1', 'h1', 'CONFIRMED', NOW() + INTERVAL '15 min', NOW())`;
 
-    await expect(
+    await expectViolation(
       db.$executeRaw`
         INSERT INTO vehicle_reservation
           (id, "userId", "rentalVehicleId", "hubId", status, "expiresAt", "createdAt")
-        VALUES ('r2', 'u1', 'v2', 'h1', 'CONFIRMED', NOW() + INTERVAL '15 min', NOW())`
-    ).rejects.toThrow(/uq_vres_active_user/i);
+        VALUES ('r2', 'u1', 'v2', 'h1', 'CONFIRMED', NOW() + INTERVAL '15 min', NOW())`,
+      '23505',
+    );
   });
 
   it('T-02 AC-7 BR-01 CANCELLED + CONFIRMED for same user is allowed', async () => {
@@ -279,7 +307,7 @@ describe('T-02 AC-7 BR-01 one active vehicle reservation per student', () => {
       db.$executeRaw`
         INSERT INTO vehicle_reservation
           (id, "userId", "rentalVehicleId", "hubId", status, "expiresAt", "createdAt")
-        VALUES ('r2', 'u1', 'v2', 'h1', 'CONFIRMED', NOW() + INTERVAL '15 min', NOW())`
+        VALUES ('r2', 'u1', 'v2', 'h1', 'CONFIRMED', NOW() + INTERVAL '15 min', NOW())`,
     ).resolves.not.toThrow();
   });
 
@@ -289,12 +317,13 @@ describe('T-02 AC-7 BR-01 one active vehicle reservation per student', () => {
         (id, "userId", "rentalVehicleId", "hubId", status, "expiresAt", "createdAt")
       VALUES ('r1', 'u1', 'v1', 'h1', 'ACTIVE', NOW() + INTERVAL '15 min', NOW())`;
 
-    await expect(
+    await expectViolation(
       db.$executeRaw`
         INSERT INTO vehicle_reservation
           (id, "userId", "rentalVehicleId", "hubId", status, "expiresAt", "createdAt")
-        VALUES ('r2', 'u1', 'v2', 'h1', 'CONFIRMED', NOW() + INTERVAL '15 min', NOW())`
-    ).rejects.toThrow(/uq_vres_active_user/i);
+        VALUES ('r2', 'u1', 'v2', 'h1', 'CONFIRMED', NOW() + INTERVAL '15 min', NOW())`,
+      '23505',
+    );
   });
 });
 
@@ -317,17 +346,21 @@ describe('T-02 AC-7 BR-01 one active reservation per rental vehicle', () => {
         (id, "userId", "rentalVehicleId", "hubId", status, "expiresAt", "createdAt")
       VALUES ('r1', 'u1', 'v1', 'h1', 'CONFIRMED', NOW() + INTERVAL '15 min', NOW())`;
 
-    await expect(
+    await expectViolation(
       db.$executeRaw`
         INSERT INTO vehicle_reservation
           (id, "userId", "rentalVehicleId", "hubId", status, "expiresAt", "createdAt")
-        VALUES ('r2', 'u2', 'v1', 'h1', 'CONFIRMED', NOW() + INTERVAL '15 min', NOW())`
-    ).rejects.toThrow(/uq_vres_active_vehicle/i);
+        VALUES ('r2', 'u2', 'v1', 'h1', 'CONFIRMED', NOW() + INTERVAL '15 min', NOW())`,
+      '23505',
+    );
   });
 });
 
 // ---------------------------------------------------------------------------
 // AC-7  BR-10 — overlapping parking windows
+// parking_reservation columns: id, userId, parkingSpaceId, hubId, vehicleClass,
+//   privateEvId, windowStart, windowEnd, status, claimedAt, expiresAt,
+//   bookingGroupId, idempotencyKey  — no createdAt
 // ---------------------------------------------------------------------------
 
 describe('T-02 AC-7 BR-10 overlapping parking windows rejected, touching windows allowed', () => {
@@ -342,54 +375,55 @@ describe('T-02 AC-7 BR-10 overlapping parking windows rejected, touching windows
   it('T-02 AC-7 BR-10 overlapping CONFIRMED parking reservations on same space are rejected (ex_parking_overlap)', async () => {
     await db.$executeRaw`
       INSERT INTO parking_reservation
-        (id, "userId", "parkingSpaceId", "hubId", "vehicleClass", "windowStart", "windowEnd", status, "expiresAt", "createdAt")
+        (id, "userId", "parkingSpaceId", "hubId", "vehicleClass", "windowStart", "windowEnd", status, "expiresAt")
       VALUES ('pr1', 'u1', 'ps1', 'h1', 'MOTORCYCLE',
               '2030-01-01T10:00:00Z', '2030-01-01T12:00:00Z',
-              'CONFIRMED', '2030-01-01T10:15:00Z', NOW())`;
+              'CONFIRMED', '2030-01-01T10:15:00Z')`;
 
-    await expect(
+    await expectViolation(
       db.$executeRaw`
         INSERT INTO parking_reservation
-          (id, "userId", "parkingSpaceId", "hubId", "vehicleClass", "windowStart", "windowEnd", status, "expiresAt", "createdAt")
+          (id, "userId", "parkingSpaceId", "hubId", "vehicleClass", "windowStart", "windowEnd", status, "expiresAt")
         VALUES ('pr2', 'u2', 'ps1', 'h1', 'MOTORCYCLE',
                 '2030-01-01T11:00:00Z', '2030-01-01T13:00:00Z',
-                'CONFIRMED', '2030-01-01T11:15:00Z', NOW())`
-    ).rejects.toThrow(/ex_parking_overlap/i);
+                'CONFIRMED', '2030-01-01T11:15:00Z')`,
+      '23P01',
+    );
   });
 
   it('T-02 AC-7 BR-10 touching parking windows (non-overlapping) are allowed', async () => {
     await db.$executeRaw`
       INSERT INTO parking_reservation
-        (id, "userId", "parkingSpaceId", "hubId", "vehicleClass", "windowStart", "windowEnd", status, "expiresAt", "createdAt")
+        (id, "userId", "parkingSpaceId", "hubId", "vehicleClass", "windowStart", "windowEnd", status, "expiresAt")
       VALUES ('pr1', 'u1', 'ps1', 'h1', 'MOTORCYCLE',
               '2030-01-01T10:00:00Z', '2030-01-01T12:00:00Z',
-              'CONFIRMED', '2030-01-01T10:15:00Z', NOW())`;
+              'CONFIRMED', '2030-01-01T10:15:00Z')`;
 
     await expect(
       db.$executeRaw`
         INSERT INTO parking_reservation
-          (id, "userId", "parkingSpaceId", "hubId", "vehicleClass", "windowStart", "windowEnd", status, "expiresAt", "createdAt")
+          (id, "userId", "parkingSpaceId", "hubId", "vehicleClass", "windowStart", "windowEnd", status, "expiresAt")
         VALUES ('pr2', 'u2', 'ps1', 'h1', 'MOTORCYCLE',
                 '2030-01-01T12:00:00Z', '2030-01-01T14:00:00Z',
-                'CONFIRMED', '2030-01-01T12:15:00Z', NOW())`
+                'CONFIRMED', '2030-01-01T12:15:00Z')`,
     ).resolves.not.toThrow();
   });
 
   it('T-02 AC-7 BR-10 overlapping window where one is CANCELLED is allowed', async () => {
     await db.$executeRaw`
       INSERT INTO parking_reservation
-        (id, "userId", "parkingSpaceId", "hubId", "vehicleClass", "windowStart", "windowEnd", status, "expiresAt", "createdAt")
+        (id, "userId", "parkingSpaceId", "hubId", "vehicleClass", "windowStart", "windowEnd", status, "expiresAt")
       VALUES ('pr1', 'u1', 'ps1', 'h1', 'MOTORCYCLE',
               '2030-01-01T10:00:00Z', '2030-01-01T12:00:00Z',
-              'CANCELLED', '2030-01-01T10:15:00Z', NOW())`;
+              'CANCELLED', '2030-01-01T10:15:00Z')`;
 
     await expect(
       db.$executeRaw`
         INSERT INTO parking_reservation
-          (id, "userId", "parkingSpaceId", "hubId", "vehicleClass", "windowStart", "windowEnd", status, "expiresAt", "createdAt")
+          (id, "userId", "parkingSpaceId", "hubId", "vehicleClass", "windowStart", "windowEnd", status, "expiresAt")
         VALUES ('pr2', 'u2', 'ps1', 'h1', 'MOTORCYCLE',
                 '2030-01-01T11:00:00Z', '2030-01-01T13:00:00Z',
-                'CONFIRMED', '2030-01-01T11:15:00Z', NOW())`
+                'CONFIRMED', '2030-01-01T11:15:00Z')`,
     ).resolves.not.toThrow();
   });
 });
@@ -418,7 +452,7 @@ describe('T-02 AC-7 FR-49 overlapping charging slots on one point rejected', () 
               'ADVANCE', 'SCHEDULED', 80, 20, 20, NOW(),
               'cp1', '2030-01-01T10:00:00Z', '2030-01-01T11:00:00Z', NOW())`;
 
-    await expect(
+    await expectViolation(
       db.$executeRaw`
         INSERT INTO charging_request
           (id, "requestedById", "vehicleKind", "rentalVehicleId", "vehicleClass", "hubId",
@@ -426,8 +460,9 @@ describe('T-02 AC-7 FR-49 overlapping charging slots on one point rejected', () 
            "chargingPointId", "slotStart", "slotEnd", "createdAt")
         VALUES ('cr2', 'u1', 'RENTAL', 'v2', 'MOTORCYCLE', 'h1',
                 'ADVANCE', 'SCHEDULED', 80, 30, 30, NOW(),
-                'cp1', '2030-01-01T10:30:00Z', '2030-01-01T11:30:00Z', NOW())`
-    ).rejects.toThrow(/ex_charging_overlap/i);
+                'cp1', '2030-01-01T10:30:00Z', '2030-01-01T11:30:00Z', NOW())`,
+      '23P01',
+    );
   });
 
   it('T-02 AC-7 FR-49 non-overlapping slots on one point are allowed', async () => {
@@ -448,7 +483,7 @@ describe('T-02 AC-7 FR-49 overlapping charging slots on one point rejected', () 
            "chargingPointId", "slotStart", "slotEnd", "createdAt")
         VALUES ('cr2', 'u1', 'RENTAL', 'v2', 'MOTORCYCLE', 'h1',
                 'ADVANCE', 'SCHEDULED', 80, 30, 30, NOW(),
-                'cp1', '2030-01-01T11:00:00Z', '2030-01-01T12:00:00Z', NOW())`
+                'cp1', '2030-01-01T11:00:00Z', '2030-01-01T12:00:00Z', NOW())`,
     ).resolves.not.toThrow();
   });
 });
@@ -473,14 +508,15 @@ describe('T-02 AC-7 one live charging request per rental vehicle (uq_charge_acti
       VALUES ('cr1', 'u1', 'RENTAL', 'v1', 'MOTORCYCLE', 'h1',
               'QUEUE', 'QUEUED', 80, 20, 20, NOW(), NOW())`;
 
-    await expect(
+    await expectViolation(
       db.$executeRaw`
         INSERT INTO charging_request
           (id, "requestedById", "vehicleKind", "rentalVehicleId", "vehicleClass", "hubId",
            mode, status, "targetPct", "startPct", "currentPct", "desiredTime", "createdAt")
         VALUES ('cr2', 'u1', 'RENTAL', 'v1', 'MOTORCYCLE', 'h1',
-                'QUEUE', 'QUEUED', 90, 20, 20, NOW(), NOW())`
-    ).rejects.toThrow(/uq_charge_active_rental/i);
+                'QUEUE', 'QUEUED', 90, 20, 20, NOW(), NOW())`,
+      '23505',
+    );
   });
 
   it('T-02 AC-7 COMPLETED charging request does not block a new QUEUED one', async () => {
@@ -497,7 +533,7 @@ describe('T-02 AC-7 one live charging request per rental vehicle (uq_charge_acti
           (id, "requestedById", "vehicleKind", "rentalVehicleId", "vehicleClass", "hubId",
            mode, status, "targetPct", "startPct", "currentPct", "desiredTime", "createdAt")
         VALUES ('cr2', 'u1', 'RENTAL', 'v1', 'MOTORCYCLE', 'h1',
-                'QUEUE', 'QUEUED', 100, 80, 80, NOW(), NOW())`
+                'QUEUE', 'QUEUED', 100, 80, 80, NOW(), NOW())`,
     ).resolves.not.toThrow();
   });
 });
@@ -522,14 +558,15 @@ describe('T-02 AC-7 one live charging request per private EV (uq_charge_active_p
       VALUES ('cr1', 'u1', 'PRIVATE', 'pev1', 'MOTORCYCLE', 'h1',
               'QUEUE', 'QUEUED', 80, 20, 20, NOW(), NOW())`;
 
-    await expect(
+    await expectViolation(
       db.$executeRaw`
         INSERT INTO charging_request
           (id, "requestedById", "vehicleKind", "privateEvId", "vehicleClass", "hubId",
            mode, status, "targetPct", "startPct", "currentPct", "desiredTime", "createdAt")
         VALUES ('cr2', 'u1', 'PRIVATE', 'pev1', 'MOTORCYCLE', 'h1',
-                'QUEUE', 'QUEUED', 90, 20, 20, NOW(), NOW())`
-    ).rejects.toThrow(/uq_charge_active_pev/i);
+                'QUEUE', 'QUEUED', 90, 20, 20, NOW(), NOW())`,
+      '23505',
+    );
   });
 });
 
@@ -550,12 +587,13 @@ describe('T-02 AC-7 UC-21 E2 one open incident per resource', () => {
         (id, "resourceType", "resourceId", "hubId", "vehicleClass", category, notes, source, status, "createdAt")
       VALUES ('inc1', 'RENTAL_VEHICLE', 'v1', 'h1', 'MOTORCYCLE', 'DAMAGE', 'notes', 'OPERATOR', 'REPORTED', NOW())`;
 
-    await expect(
+    await expectViolation(
       db.$executeRaw`
         INSERT INTO incident
           (id, "resourceType", "resourceId", "hubId", "vehicleClass", category, notes, source, status, "createdAt")
-        VALUES ('inc2', 'RENTAL_VEHICLE', 'v1', 'h1', 'MOTORCYCLE', 'DAMAGE', 'notes', 'OPERATOR', 'REPORTED', NOW())`
-    ).rejects.toThrow(/uq_incident_open/i);
+        VALUES ('inc2', 'RENTAL_VEHICLE', 'v1', 'h1', 'MOTORCYCLE', 'DAMAGE', 'notes', 'OPERATOR', 'REPORTED', NOW())`,
+      '23505',
+    );
   });
 
   it('T-02 AC-7 UC-21 E2 IN_MAINTENANCE incident blocks a second open incident', async () => {
@@ -564,12 +602,13 @@ describe('T-02 AC-7 UC-21 E2 one open incident per resource', () => {
         (id, "resourceType", "resourceId", "hubId", "vehicleClass", category, notes, source, status, "createdAt")
       VALUES ('inc1', 'RENTAL_VEHICLE', 'v1', 'h1', 'MOTORCYCLE', 'DAMAGE', 'notes', 'OPERATOR', 'IN_MAINTENANCE', NOW())`;
 
-    await expect(
+    await expectViolation(
       db.$executeRaw`
         INSERT INTO incident
           (id, "resourceType", "resourceId", "hubId", "vehicleClass", category, notes, source, status, "createdAt")
-        VALUES ('inc2', 'RENTAL_VEHICLE', 'v1', 'h1', 'MOTORCYCLE', 'DAMAGE', 'notes', 'OPERATOR', 'REPORTED', NOW())`
-    ).rejects.toThrow(/uq_incident_open/i);
+        VALUES ('inc2', 'RENTAL_VEHICLE', 'v1', 'h1', 'MOTORCYCLE', 'DAMAGE', 'notes', 'OPERATOR', 'REPORTED', NOW())`,
+      '23505',
+    );
   });
 
   it('T-02 AC-7 UC-21 E2 second open incident after first is RESOLVED is allowed', async () => {
@@ -582,7 +621,7 @@ describe('T-02 AC-7 UC-21 E2 one open incident per resource', () => {
       db.$executeRaw`
         INSERT INTO incident
           (id, "resourceType", "resourceId", "hubId", "vehicleClass", category, notes, source, status, "createdAt")
-        VALUES ('inc2', 'RENTAL_VEHICLE', 'v1', 'h1', 'MOTORCYCLE', 'DAMAGE', 'notes', 'OPERATOR', 'REPORTED', NOW())`
+        VALUES ('inc2', 'RENTAL_VEHICLE', 'v1', 'h1', 'MOTORCYCLE', 'DAMAGE', 'notes', 'OPERATOR', 'REPORTED', NOW())`,
     ).resolves.not.toThrow();
   });
 });
@@ -598,28 +637,32 @@ describe('T-02 AC-7 FR-63 audit_log rejects UPDATE and DELETE, allows INSERT and
     await expect(
       db.$executeRaw`
         INSERT INTO audit_log (at, action, "entityType", "entityIds", details)
-        VALUES (NOW(), 'TEST_ACTION', 'test', '{}', '{}')`
+        VALUES (NOW(), 'TEST_ACTION', 'test', '{}', '{}')`,
     ).resolves.not.toThrow();
   });
 
-  it('T-02 AC-7 FR-63 UPDATE on audit_log row is rejected by trigger (audit_log is append-only)', async () => {
+  it('T-02 AC-7 FR-63 UPDATE on audit_log row is rejected by trigger (P0001)', async () => {
     await db.$executeRaw`
       INSERT INTO audit_log (at, action, "entityType", "entityIds", details)
       VALUES (NOW(), 'TEST_UPD', 'test', '{}', '{}')`;
 
-    await expect(
-      db.$executeRaw`UPDATE audit_log SET action = 'CHANGED' WHERE action = 'TEST_UPD'`
-    ).rejects.toThrow(/audit_log is append-only/i);
+    await expectViolation(
+      db.$executeRaw`UPDATE audit_log SET action = 'CHANGED' WHERE action = 'TEST_UPD'`,
+      'P0001',
+      'audit_log is append-only',
+    );
   });
 
-  it('T-02 AC-7 FR-63 DELETE on audit_log row is rejected by trigger (audit_log is append-only)', async () => {
+  it('T-02 AC-7 FR-63 DELETE on audit_log row is rejected by trigger (P0001)', async () => {
     await db.$executeRaw`
       INSERT INTO audit_log (at, action, "entityType", "entityIds", details)
       VALUES (NOW(), 'TEST_DEL', 'test', '{}', '{}')`;
 
-    await expect(
-      db.$executeRaw`DELETE FROM audit_log WHERE action = 'TEST_DEL'`
-    ).rejects.toThrow(/audit_log is append-only/i);
+    await expectViolation(
+      db.$executeRaw`DELETE FROM audit_log WHERE action = 'TEST_DEL'`,
+      'P0001',
+      'audit_log is append-only',
+    );
   });
 
   it('T-02 AC-7 FR-63 TRUNCATE on audit_log is allowed (not blocked by trigger)', async () => {
@@ -628,7 +671,7 @@ describe('T-02 AC-7 FR-63 audit_log rejects UPDATE and DELETE, allows INSERT and
       VALUES (NOW(), 'TRUNC_ME', 'test', '{}', '{}')`;
 
     await expect(
-      db.$executeRawUnsafe('TRUNCATE TABLE audit_log RESTART IDENTITY CASCADE')
+      db.$executeRawUnsafe('TRUNCATE TABLE audit_log RESTART IDENTITY CASCADE'),
     ).resolves.not.toThrow();
   });
 });
@@ -647,7 +690,7 @@ describe('T-02 AC-7 NFR-13 rental vehicle battery constraints (ck_rv_battery)', 
     await expect(
       db.$executeRaw`
         INSERT INTO rental_vehicle (id, "hubId", type, "vehicleClass", status, "batteryPct", "updatedAt")
-        VALUES ('v0', 'h1', 'E_BICYCLE', 'MOTORCYCLE', 'LOW_BATTERY', 0, NOW())`
+        VALUES ('v0', 'h1', 'E_BICYCLE', 'MOTORCYCLE', 'LOW_BATTERY', 0, NOW())`,
     ).resolves.not.toThrow();
   });
 
@@ -655,24 +698,26 @@ describe('T-02 AC-7 NFR-13 rental vehicle battery constraints (ck_rv_battery)', 
     await expect(
       db.$executeRaw`
         INSERT INTO rental_vehicle (id, "hubId", type, "vehicleClass", status, "batteryPct", "updatedAt")
-        VALUES ('v100', 'h1', 'E_BICYCLE', 'MOTORCYCLE', 'AVAILABLE', 100, NOW())`
+        VALUES ('v100', 'h1', 'E_BICYCLE', 'MOTORCYCLE', 'AVAILABLE', 100, NOW())`,
     ).resolves.not.toThrow();
   });
 
   it('T-02 AC-7 NFR-13 batteryPct -1 is rejected (ck_rv_battery)', async () => {
-    await expect(
+    await expectViolation(
       db.$executeRaw`
         INSERT INTO rental_vehicle (id, "hubId", type, "vehicleClass", status, "batteryPct", "updatedAt")
-        VALUES ('vneg', 'h1', 'E_BICYCLE', 'MOTORCYCLE', 'AVAILABLE', -1, NOW())`
-    ).rejects.toThrow(/ck_rv_battery/i);
+        VALUES ('vneg', 'h1', 'E_BICYCLE', 'MOTORCYCLE', 'AVAILABLE', -1, NOW())`,
+      '23514',
+    );
   });
 
   it('T-02 AC-7 NFR-13 batteryPct 101 is rejected (ck_rv_battery)', async () => {
-    await expect(
+    await expectViolation(
       db.$executeRaw`
         INSERT INTO rental_vehicle (id, "hubId", type, "vehicleClass", status, "batteryPct", "updatedAt")
-        VALUES ('vhi', 'h1', 'E_BICYCLE', 'MOTORCYCLE', 'AVAILABLE', 101, NOW())`
-    ).rejects.toThrow(/ck_rv_battery/i);
+        VALUES ('vhi', 'h1', 'E_BICYCLE', 'MOTORCYCLE', 'AVAILABLE', 101, NOW())`,
+      '23514',
+    );
   });
 });
 
@@ -687,7 +732,7 @@ describe('T-02 AC-7 NFR-13 private EV battery constraints (ck_pev_battery)', () 
     await expect(
       db.$executeRaw`
         INSERT INTO private_ev (id, "ownerId", type, "vehicleClass", label, "batteryCapacityKwh", "batteryPct")
-        VALUES ('pev0', 'u1', 'E_MOTORCYCLE', 'MOTORCYCLE', 'ev', 10.0, 0)`
+        VALUES ('pev0', 'u1', 'E_MOTORCYCLE', 'MOTORCYCLE', 'ev', 10.0, 0)`,
     ).resolves.not.toThrow();
   });
 
@@ -695,24 +740,26 @@ describe('T-02 AC-7 NFR-13 private EV battery constraints (ck_pev_battery)', () 
     await expect(
       db.$executeRaw`
         INSERT INTO private_ev (id, "ownerId", type, "vehicleClass", label, "batteryCapacityKwh", "batteryPct")
-        VALUES ('pev100', 'u1', 'E_MOTORCYCLE', 'MOTORCYCLE', 'ev', 10.0, 100)`
+        VALUES ('pev100', 'u1', 'E_MOTORCYCLE', 'MOTORCYCLE', 'ev', 10.0, 100)`,
     ).resolves.not.toThrow();
   });
 
   it('T-02 AC-7 NFR-13 private_ev batteryPct -1 is rejected (ck_pev_battery)', async () => {
-    await expect(
+    await expectViolation(
       db.$executeRaw`
         INSERT INTO private_ev (id, "ownerId", type, "vehicleClass", label, "batteryCapacityKwh", "batteryPct")
-        VALUES ('pevneg', 'u1', 'E_MOTORCYCLE', 'MOTORCYCLE', 'ev', 10.0, -1)`
-    ).rejects.toThrow(/ck_pev_battery/i);
+        VALUES ('pevneg', 'u1', 'E_MOTORCYCLE', 'MOTORCYCLE', 'ev', 10.0, -1)`,
+      '23514',
+    );
   });
 
   it('T-02 AC-7 NFR-13 private_ev batteryPct 101 is rejected (ck_pev_battery)', async () => {
-    await expect(
+    await expectViolation(
       db.$executeRaw`
         INSERT INTO private_ev (id, "ownerId", type, "vehicleClass", label, "batteryCapacityKwh", "batteryPct")
-        VALUES ('pevhi', 'u1', 'E_MOTORCYCLE', 'MOTORCYCLE', 'ev', 10.0, 101)`
-    ).rejects.toThrow(/ck_pev_battery/i);
+        VALUES ('pevhi', 'u1', 'E_MOTORCYCLE', 'MOTORCYCLE', 'ev', 10.0, 101)`,
+      '23514',
+    );
   });
 });
 
@@ -735,7 +782,7 @@ describe('T-02 AC-7 ck_cr_target charging targetPct > 0 and <= 100', () => {
           (id, "requestedById", "vehicleKind", "rentalVehicleId", "vehicleClass", "hubId",
            mode, status, "targetPct", "startPct", "currentPct", "desiredTime", "createdAt")
         VALUES ('cr1', 'u1', 'RENTAL', 'v1', 'MOTORCYCLE', 'h1',
-                'QUEUE', 'QUEUED', 1, 0, 0, NOW(), NOW())`
+                'QUEUE', 'QUEUED', 1, 0, 0, NOW(), NOW())`,
     ).resolves.not.toThrow();
   });
 
@@ -746,35 +793,38 @@ describe('T-02 AC-7 ck_cr_target charging targetPct > 0 and <= 100', () => {
           (id, "requestedById", "vehicleKind", "rentalVehicleId", "vehicleClass", "hubId",
            mode, status, "targetPct", "startPct", "currentPct", "desiredTime", "createdAt")
         VALUES ('cr100', 'u1', 'RENTAL', 'v1', 'MOTORCYCLE', 'h1',
-                'QUEUE', 'QUEUED', 100, 50, 50, NOW(), NOW())`
+                'QUEUE', 'QUEUED', 100, 50, 50, NOW(), NOW())`,
     ).resolves.not.toThrow();
   });
 
   it('T-02 AC-7 targetPct 0 is rejected (ck_cr_target)', async () => {
-    await expect(
+    await expectViolation(
       db.$executeRaw`
         INSERT INTO charging_request
           (id, "requestedById", "vehicleKind", "rentalVehicleId", "vehicleClass", "hubId",
            mode, status, "targetPct", "startPct", "currentPct", "desiredTime", "createdAt")
         VALUES ('cr0', 'u1', 'RENTAL', 'v1', 'MOTORCYCLE', 'h1',
-                'QUEUE', 'QUEUED', 0, 20, 20, NOW(), NOW())`
-    ).rejects.toThrow(/ck_cr_target/i);
+                'QUEUE', 'QUEUED', 0, 20, 20, NOW(), NOW())`,
+      '23514',
+    );
   });
 
   it('T-02 AC-7 targetPct 101 is rejected (ck_cr_target)', async () => {
-    await expect(
+    await expectViolation(
       db.$executeRaw`
         INSERT INTO charging_request
           (id, "requestedById", "vehicleKind", "rentalVehicleId", "vehicleClass", "hubId",
            mode, status, "targetPct", "startPct", "currentPct", "desiredTime", "createdAt")
         VALUES ('cr101', 'u1', 'RENTAL', 'v1', 'MOTORCYCLE', 'h1',
-                'QUEUE', 'QUEUED', 101, 20, 20, NOW(), NOW())`
-    ).rejects.toThrow(/ck_cr_target/i);
+                'QUEUE', 'QUEUED', 101, 20, 20, NOW(), NOW())`,
+      '23514',
+    );
   });
 });
 
 // ---------------------------------------------------------------------------
 // AC-7  ck_pr_window — parking windowEnd must be after windowStart
+// parking_reservation has no createdAt — use only real columns
 // ---------------------------------------------------------------------------
 
 describe('T-02 AC-7 ck_pr_window parking windowEnd > windowStart', () => {
@@ -786,27 +836,29 @@ describe('T-02 AC-7 ck_pr_window parking windowEnd > windowStart', () => {
   });
 
   it('T-02 AC-7 windowEnd = windowStart is rejected (ck_pr_window)', async () => {
-    await expect(
+    await expectViolation(
       db.$executeRaw`
         INSERT INTO parking_reservation
           (id, "userId", "parkingSpaceId", "hubId", "vehicleClass",
-           "windowStart", "windowEnd", status, "expiresAt", "createdAt")
+           "windowStart", "windowEnd", status, "expiresAt")
         VALUES ('pr_bad', 'u1', 'ps1', 'h1', 'MOTORCYCLE',
                 '2030-01-01T10:00:00Z', '2030-01-01T10:00:00Z',
-                'CONFIRMED', '2030-01-01T10:15:00Z', NOW())`
-    ).rejects.toThrow(/ck_pr_window/i);
+                'CONFIRMED', '2030-01-01T10:15:00Z')`,
+      '23514',
+    );
   });
 
   it('T-02 AC-7 windowEnd before windowStart is rejected (ck_pr_window)', async () => {
-    await expect(
+    await expectViolation(
       db.$executeRaw`
         INSERT INTO parking_reservation
           (id, "userId", "parkingSpaceId", "hubId", "vehicleClass",
-           "windowStart", "windowEnd", status, "expiresAt", "createdAt")
+           "windowStart", "windowEnd", status, "expiresAt")
         VALUES ('pr_rev', 'u1', 'ps1', 'h1', 'MOTORCYCLE',
                 '2030-01-01T12:00:00Z', '2030-01-01T10:00:00Z',
-                'CONFIRMED', '2030-01-01T12:15:00Z', NOW())`
-    ).rejects.toThrow(/ck_pr_window/i);
+                'CONFIRMED', '2030-01-01T12:15:00Z')`,
+      '23514',
+    );
   });
 });
 
@@ -824,7 +876,7 @@ describe('T-02 AC-7 ck_cr_slot SCHEDULED request with point must have valid slot
   });
 
   it('T-02 AC-7 SCHEDULED with chargingPointId but null slotEnd is rejected (ck_cr_slot)', async () => {
-    await expect(
+    await expectViolation(
       db.$executeRaw`
         INSERT INTO charging_request
           (id, "requestedById", "vehicleKind", "rentalVehicleId", "vehicleClass", "hubId",
@@ -832,12 +884,13 @@ describe('T-02 AC-7 ck_cr_slot SCHEDULED request with point must have valid slot
            "chargingPointId", "slotStart", "slotEnd", "createdAt")
         VALUES ('cr_bad', 'u1', 'RENTAL', 'v1', 'MOTORCYCLE', 'h1',
                 'ADVANCE', 'SCHEDULED', 80, 20, 20, NOW(),
-                'cp1', '2030-01-01T10:00:00Z', NULL, NOW())`
-    ).rejects.toThrow(/ck_cr_slot/i);
+                'cp1', '2030-01-01T10:00:00Z', NULL, NOW())`,
+      '23514',
+    );
   });
 
   it('T-02 AC-7 SCHEDULED with chargingPointId but null slotStart is rejected (ck_cr_slot)', async () => {
-    await expect(
+    await expectViolation(
       db.$executeRaw`
         INSERT INTO charging_request
           (id, "requestedById", "vehicleKind", "rentalVehicleId", "vehicleClass", "hubId",
@@ -845,8 +898,9 @@ describe('T-02 AC-7 ck_cr_slot SCHEDULED request with point must have valid slot
            "chargingPointId", "slotStart", "slotEnd", "createdAt")
         VALUES ('cr_bad2', 'u1', 'RENTAL', 'v1', 'MOTORCYCLE', 'h1',
                 'ADVANCE', 'SCHEDULED', 80, 20, 20, NOW(),
-                'cp1', NULL, '2030-01-01T11:00:00Z', NOW())`
-    ).rejects.toThrow(/ck_cr_slot/i);
+                'cp1', NULL, '2030-01-01T11:00:00Z', NOW())`,
+      '23514',
+    );
   });
 
   it('T-02 AC-7 QUEUED request without chargingPointId and no slot times is allowed', async () => {
@@ -856,7 +910,7 @@ describe('T-02 AC-7 ck_cr_slot SCHEDULED request with point must have valid slot
           (id, "requestedById", "vehicleKind", "rentalVehicleId", "vehicleClass", "hubId",
            mode, status, "targetPct", "startPct", "currentPct", "desiredTime", "createdAt")
         VALUES ('cr_ok', 'u1', 'RENTAL', 'v1', 'MOTORCYCLE', 'h1',
-                'QUEUE', 'QUEUED', 80, 20, 20, NOW(), NOW())`
+                'QUEUE', 'QUEUED', 80, 20, 20, NOW(), NOW())`,
     ).resolves.not.toThrow();
   });
 });
@@ -877,12 +931,13 @@ describe('T-02 AC-7 uq_alert_open one OPEN alert per dedupeKey', () => {
         (id, type, "hubId", "resourceIds", metric, message, "dedupeKey", status, "createdAt", "lastSeenAt")
       VALUES ('a1', 'NEAR_CAPACITY', 'h1', '{}', '{}', 'msg', 'NEAR:h1:PARKING:MOTORCYCLE', 'OPEN', NOW(), NOW())`;
 
-    await expect(
+    await expectViolation(
       db.$executeRaw`
         INSERT INTO alert
           (id, type, "hubId", "resourceIds", metric, message, "dedupeKey", status, "createdAt", "lastSeenAt")
-        VALUES ('a2', 'NEAR_CAPACITY', 'h1', '{}', '{}', 'msg', 'NEAR:h1:PARKING:MOTORCYCLE', 'OPEN', NOW(), NOW())`
-    ).rejects.toThrow(/uq_alert_open/i);
+        VALUES ('a2', 'NEAR_CAPACITY', 'h1', '{}', '{}', 'msg', 'NEAR:h1:PARKING:MOTORCYCLE', 'OPEN', NOW(), NOW())`,
+      '23505',
+    );
   });
 
   it('T-02 AC-7 non-OPEN alert with same dedupeKey is allowed', async () => {
@@ -895,7 +950,7 @@ describe('T-02 AC-7 uq_alert_open one OPEN alert per dedupeKey', () => {
       db.$executeRaw`
         INSERT INTO alert
           (id, type, "hubId", "resourceIds", metric, message, "dedupeKey", status, "createdAt", "lastSeenAt")
-        VALUES ('a2', 'NEAR_CAPACITY', 'h1', '{}', '{}', 'msg', 'NEAR:h1:PARKING:MOTORCYCLE', 'OPEN', NOW(), NOW())`
+        VALUES ('a2', 'NEAR_CAPACITY', 'h1', '{}', '{}', 'msg', 'NEAR:h1:PARKING:MOTORCYCLE', 'OPEN', NOW(), NOW())`,
     ).resolves.not.toThrow();
   });
 });
