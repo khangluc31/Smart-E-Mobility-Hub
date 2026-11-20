@@ -255,9 +255,7 @@ Copy the `hubs` module when you start a new one. Response shapes are listed in `
 ```bash
 git clone https://github.com/<org>/smart-emobility-hub.git
 cd smart-emobility-hub
-npm install                       # root (just the script that starts both apps)
-npm install --prefix backend
-npm install --prefix frontend
+npm install                       # installs root + backend + frontend (npm workspaces)
 ```
 
 ### 2. Start Postgres
@@ -266,7 +264,7 @@ npm install --prefix frontend
 docker compose up -d
 ```
 
-This starts Postgres 16 on `localhost:5432` with two databases: `emobility` (development) and `emobility_test` (tests). User and password are both `emobility`.
+This starts Postgres 16 on `localhost:5432` with two databases: `emobility` (development) and `emobility_test` (tests). User and password are both `postgres`.
 
 ### 3. Set up the database
 
