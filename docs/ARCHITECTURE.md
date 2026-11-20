@@ -222,7 +222,7 @@ A user asking for another user's record gets 404 (doesn't reveal it exists).
 
 ## 5. Data model
 
-Prisma models use PascalCase and `@@map("snake_case")`. All ids are `String` (readable seed ids like `RV-0001`, `MET-CP-M-03`; `cuid()` for created rows). All times are `DateTime @db.Timestamptz`. Battery fields are `Float` 0–100.
+Prisma models use PascalCase and `@@map("snake_case")`; **fields are not `@map`ped**, so columns are camelCase (raw SQL quotes them: `"userId"`). All ids are `String` (readable seed ids like `RV-0001`, `MET-CP-M-03`; `cuid()` for created rows), except `audit_log.id` (bigserial). All times are `DateTime @db.Timestamptz`. Battery fields are `Float` 0–100. Every state and vocabulary column is a **Prisma enum** = Postgres enum type, values exactly as CONTRACTS §1 (D-21); `types/enums.ts` mirrors them for code and the frontend.
 
 ### 5.1 Tables
 
@@ -243,7 +243,7 @@ Prisma models use PascalCase and `@@map("snake_case")`. All ids are `String` (re
 | `rental_vehicle` | id, hubId, type `E_BICYCLE\|E_MOTORCYCLE`, vehicleClass (always `MOTORCYCLE`), status, batteryPct, parkingSpaceId? (unique — the FLEET space it occupies, D-14), updatedAt |
 | `private_ev` | id, ownerId, type `E_MOTORCYCLE\|CAR`, vehicleClass, label, batteryCapacityKwh, batteryPct, deletedAt? (soft delete, FR-27) |
 | `parking_space` | id, hubId, vehicleClass, pool `FLEET\|PUBLIC` (D-16), status `FREE\|RESERVED\|OCCUPIED\|UNAVAILABLE`, reservedForTaskId? (redistribution, D-19) |
-| `charging_point` | id, hubId, vehicleClass, status `AVAILABLE\|CHARGING\|FAULTY`, currentRequestId? |
+| `charging_point` | id, hubId, vehicleClass, status `AVAILABLE\|CHARGING\|FAULTY` — the current session is the `charging_request` with this `chargingPointId` and status `CHARGING` (derived, D-04) |
 
 **Bookings**
 
@@ -262,7 +262,7 @@ Prisma models use PascalCase and `@@map("snake_case")`. All ids are `String` (re
 | `incident_report` | id, incidentId, source, reportedById?, notes, createdAt — extra reports linked to an open incident (UC-21 E2) |
 | `incident_impact` | id, incidentId, bookingType `VEHICLE_RESERVATION\|PARKING_RESERVATION\|CHARGING_REQUEST`, bookingId, userId?, outcome `REASSIGNED\|CANCELLED\|ENDED`, newResourceId? — FR-39/40 |
 | `alert` | id, type `NEAR_CAPACITY\|LOW_BATTERY\|FAULT\|STALLED_FEED\|SHORTAGE\|SURPLUS`, hubId, vehicleClass?, resourceIds String[], metric Json, message, status `OPEN\|ACKNOWLEDGED\|DISMISSED\|RESOLVED`, dedupeKey, createdAt, lastSeenAt, closedAt?, closedById? |
-| `redistribution_task` | id, sourceHubId, destHubId, vehicleClass, vehicleType?, count, status, override, reason?, origin `MANUAL\|SIMULATION`, recommendationId?, createdById, timestamps per state |
+| `redistribution_task` | id, sourceHubId, destHubId, vehicleClass, vehicleType?, count, status, override, reason?, origin `MANUAL\|SIMULATION`, recommendationId?, createdById, createdAt, approvedAt?, startedAt?, completedAt?, failedAt?, cancelledAt?, updatedAt |
 | `redistribution_task_vehicle` | taskId, rentalVehicleId (PK both) |
 | `notification` | id, userId, type, title, body, data Json, readAt?, createdAt |
 | `audit_log` | id (bigserial), at, actorId?, actorRole?, action, entityType, entityIds String[], reason?, details Json — append-only |
@@ -320,10 +320,20 @@ CREATE TRIGGER audit_log_no_update BEFORE UPDATE OR DELETE ON audit_log
 
 -- sanity
 ALTER TABLE rental_vehicle ADD CONSTRAINT ck_rv_battery CHECK ("batteryPct" BETWEEN 0 AND 100);
+ALTER TABLE private_ev ADD CONSTRAINT ck_pev_battery CHECK ("batteryPct" BETWEEN 0 AND 100);
 ALTER TABLE parking_reservation ADD CONSTRAINT ck_pr_window CHECK ("windowEnd" > "windowStart");
+ALTER TABLE charging_request ADD CONSTRAINT ck_cr_target CHECK ("targetPct" > 0 AND "targetPct" <= 100);
+
+-- a booked/running slot must have both ends, else tstzrange(start, NULL) is infinite
+-- and ex_charging_overlap would block the point forever
+ALTER TABLE charging_request ADD CONSTRAINT ck_cr_slot CHECK (
+  status NOT IN ('SCHEDULED','CHARGING') OR "chargingPointId" IS NULL
+  OR ("slotStart" IS NOT NULL AND "slotEnd" IS NOT NULL AND "slotEnd" > "slotStart"));
 ```
 
-Column names must match the Prisma field names (quoted camelCase) unless the schema uses `@map`. Keep them in sync.
+Column names must match the Prisma field names (quoted camelCase) — fields are never `@map`ped. Keep them in sync.
+
+**Prisma can't see these objects.** After any schema change, check the generated migration: it must never drop or alter a §5.2 object. `constraints.test.ts` fails if one disappears. `TRUNCATE` is not blocked by the audit trigger, so test cleanup uses `TRUNCATE … CASCADE`, never `DELETE`.
 
 ### 5.3 Seed (`prisma/seed.ts`, M3) — proposal, confirm with team (SPEC §10 Q5)
 

@@ -90,7 +90,7 @@ All values live in `backend/src/core/config.ts`, loaded from env with these defa
 
 ## 4. State machines (Table 2.6 — authoritative, used by every module)
 
-Implement each as an explicit transition table in `backend/src/core/stateMachine.ts`; state names live in `backend/src/types/enums.ts` (copied to `frontend/src/types/enums.ts`). Any transition not listed → throw `InvalidStateTransitionError` (HTTP 409) and write a security-audit log row (BR-05).
+Implement each as an explicit transition table in `backend/src/core/stateMachine.ts`; state names are Prisma enums in `schema.prisma` (D-21), mirrored in `backend/src/types/enums.ts` (copied to `frontend/src/types/enums.ts`). Any transition not listed → throw `InvalidStateTransitionError` (HTTP 409) and write a security-audit log row (BR-05).
 
 | Entity | States | Allowed transitions |
 |---|---|---|
@@ -261,6 +261,7 @@ This is the canonical list. `ARCHITECTURE.md` §16 gives the trade-offs behind e
 | D-18 | A Rental vehicle that is **charging** is not rentable (hidden from search). Reserving a vehicle that is only **queued** for charging cancels its queued request. | Table 2.6 has no "charging" vehicle state; this avoids renting a vehicle off the charger. |
 | D-19 | Redistribution picks and locks the actual vehicles when the task moves to **In progress**, and reserves the destination FLEET spaces at the same moment. At creation/approval only the counts are checked. | Avoids holding vehicles away from students while a task waits for approval. |
 | D-20 | Applying a simulation recommendation is two calls: `preview` (shows the exact live changes, returns a one-time confirm token) then `apply` with that token (FR-58, UC-33 E2). | Enforces the "secondary confirmation" in the API, not just in the UI. |
+| D-21 | Every state and vocabulary column is a **Prisma enum** (a Postgres enum type) with exactly the §4 / CONTRACTS §1 values. `types/enums.ts` mirrors them as plain TS unions (copied to the frontend), with a type-level check that they match the Prisma enums. | The database itself refuses a misspelled status, on top of `assertTransition()` (BR-05). |
 
 ## 9. Traceability
 
