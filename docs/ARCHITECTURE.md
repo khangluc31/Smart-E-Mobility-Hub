@@ -469,7 +469,7 @@ Every 5 s, for each Hub not in "stalled" demo mode, reads current state and prod
 | STALLED_FEED (FR-35) | `now − lastTelemetryAt ≥ 3 × interval` | `STALLED:{hub}` |
 | SHORTAGE / SURPLUS (BR-15) | available moto Rental vehicles < min / > max, computed by `redistribution.service.detectImbalance(hubId)` (M2, FR-43); skipped while Hub is DEGRADED (UC-24 E1) | `SHORTAGE:{hub}:{class}` |
 
-- **Utilisation:** parking = (OCCUPIED + RESERVED) ÷ (all spaces of the class − UNAVAILABLE), both pools; charging = CHARGING ÷ (points of the class − FAULTY). Fewer usable resources → higher utilisation, which is what the Operator needs to see.
+- **Utilisation:** parking = (OCCUPIED + RESERVED) ÷ (all spaces of the class − UNAVAILABLE), both pools; charging = CHARGING ÷ (points of the class − FAULTY). Fewer usable resources → higher utilisation, which is what the Operator needs to see. No resources of the class → 0 %; resources exist but all withdrawn → 100 %. Alerts compare the unrounded ratio; responses round to 1 decimal. One definition, in `hubs/hubs.metrics.ts` (pure); monitoring imports it.
 - **Upsert:** if an OPEN alert with the key exists, update `lastSeenAt` and `metric`; else insert. Condition gone → set RESOLVED (UC-20 A2). Acknowledge/dismiss → status change + `audit()` (FR-34).
 - **Hub DEGRADED** is computed (`lastTelemetryAt` older than 3 intervals), not stored; the Hub list and dashboard return `degraded: boolean` and `lastTelemetryAt` (FR-03).
 
@@ -664,7 +664,7 @@ export async function takeSnapshot(): Promise<Snapshot> {
 | Isolation | §12.5 | NFR-23 |
 | Load (manual, before demo) | `autocannon` script in `scripts/` | NFR-01 p95 ≤ 2 s |
 
-- `tests/helpers.ts`: `createTestApp()` (jobs off), `resetDb()` (truncate + small fixture with all 5 Hubs), `loginAs('student1' | 'operator1')`, `setClock()` for time-based rules (pass `now` into services instead of calling `new Date()` deep inside — makes expiry testable).
+- `tests/helpers.ts`: `createTestApp()` (jobs off), `resetDb()` (truncate + small documented `FIXTURE` with all 5 Hubs), `loginAs('student1' | 'student2' | 'operator1')` → `Bearer` header. Time-based rules: services take `now` as a parameter, so tests pass a fixed `now` — no global clock mocking.
 - Coverage: Vitest thresholds `lines: 70` per `src/modules/**` and `src/core/**`.
 - CI (`.github/workflows/ci.yml`): Postgres service → `npm ci` → lint → typecheck → `prisma migrate deploy` → tests with coverage → build both apps → `madge --circular`.
 
