@@ -57,7 +57,7 @@ jobs:
         run: npm run db:deploy -w backend
 
       - name: Test
-        run: npm test
+        run: npm run test:coverage -w backend
 
       - name: Build
         run: npm run build

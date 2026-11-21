@@ -17,7 +17,10 @@ export default defineConfig({
     },
     coverage: {
       provider: 'v8',
-      // Thresholds come in T-03
+      include: ['src/**'],
+      thresholds: {
+        'src/core/**': { lines: 70 },
+      },
     },
   },
 });
