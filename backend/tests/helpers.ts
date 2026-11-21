@@ -6,7 +6,6 @@
 import { db } from '../src/core/db';
 import { createApp } from '../src/app';
 import { signToken } from '../src/core/auth';
-import type { Role } from '../src/types/enums';
 
 // ---- createTestApp ----
 
