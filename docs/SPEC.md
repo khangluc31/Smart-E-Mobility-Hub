@@ -118,7 +118,7 @@ Implement each as an explicit transition table in `backend/src/core/stateMachine
 
 | Entity | States | Allowed transitions |
 |---|---|---|
-| Alert | `OPEN`, `ACKNOWLEDGED`, `DISMISSED`, `RESOLVED` | OPEN→ACKNOWLEDGED · OPEN→DISMISSED (FR-34) · OPEN→RESOLVED (condition gone, UC-20 A2) |
+| Alert | `OPEN`, `ACKNOWLEDGED`, `DISMISSED`, `RESOLVED` | OPEN→ACKNOWLEDGED · OPEN→DISMISSED (FR-34) · OPEN→RESOLVED · ACKNOWLEDGED→RESOLVED (condition gone, UC-20 A2 — an acknowledged alert stays active until its condition clears) |
 | Simulation run | `RUNNING`, `COMPLETED`, `FAILED`, `INCOMPLETE` | RUNNING→COMPLETED · RUNNING→FAILED · RUNNING→INCOMPLETE (time limit, FR-55) |
 | Recommendation | `PENDING`, `APPLIED`, `DISMISSED`, `BLOCKED` | PENDING→APPLIED · PENDING→DISMISSED · PENDING→BLOCKED (live re-check failed, UC-33 E1) |
 
