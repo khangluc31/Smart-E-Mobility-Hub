@@ -1,7 +1,14 @@
-import express, { Request, Response, NextFunction } from 'express';
+import express, { Router, type Request, type Response } from 'express';
 import cors from 'cors';
 import { config } from './core/config';
 import { db } from './core/db';
+import { requireAuth, requireRole } from './core/auth';
+import { errorHandler, notFoundHandler } from './core/errorHandler';
+
+// Routers later tickets attach routes to. The ops router already has the auth +
+// OPERATOR guards applied at mount (FR-61), so ops routes never re-add them.
+export const apiRouter = Router();
+export const opsRouter = Router();
 
 export function createApp() {
   const app = express();
@@ -19,7 +26,7 @@ export function createApp() {
     }),
   );
 
-  // --- Health check (CONTRACTS §2, AC-4/5) ---
+  // Health check (CONTRACTS §2) — public, kept inline.
   app.get('/api/health', async (_req: Request, res: Response) => {
     try {
       await db.$queryRawUnsafe('SELECT 1');
@@ -40,28 +47,12 @@ export function createApp() {
     }
   });
 
-  // --- 404 handler (ARCHITECTURE §4.4 shape, AC-6) ---
-  app.use((_req: Request, res: Response) => {
-    res.status(404).json({
-      error: {
-        code: 'NOT_FOUND',
-        message: `Route not found.`,
-        nextActions: ['Check the URL and HTTP method.', 'See docs/CONTRACTS.md for valid endpoints.'],
-      },
-    });
-  });
+  // Operator routes mount first so the guards run once for every /api/ops/* route.
+  app.use('/api/ops', requireAuth, requireRole('OPERATOR'), opsRouter);
+  app.use('/api', apiRouter);
 
-  // --- Global error handler (ARCHITECTURE §4.4 shape) ---
-  app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-    console.error('[error]', err);
-    res.status(500).json({
-      error: {
-        code: 'INTERNAL_ERROR',
-        message: 'An unexpected error occurred.',
-        nextActions: ['Retry the request.', 'If the problem persists, contact the team.'],
-      },
-    });
-  });
+  app.use(notFoundHandler);
+  app.use(errorHandler);
 
   return app;
 }
