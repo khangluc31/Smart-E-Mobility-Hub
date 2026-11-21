@@ -20,6 +20,7 @@ export default defineConfig({
       include: ['src/**'],
       thresholds: {
         'src/core/**': { lines: 70 },
+        'src/modules/hubs/**': { lines: 70 },
       },
     },
   },

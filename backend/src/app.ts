@@ -4,11 +4,7 @@ import { config } from './core/config';
 import { db } from './core/db';
 import { requireAuth, requireRole } from './core/auth';
 import { errorHandler, notFoundHandler } from './core/errorHandler';
-
-// Routers later tickets attach routes to. The ops router already has the auth +
-// OPERATOR guards applied at mount (FR-61), so ops routes never re-add them.
-export const apiRouter = Router();
-export const opsRouter = Router();
+import { hubsRouter } from './modules/hubs/hubs.routes';
 
 export function createApp() {
   const app = express();
@@ -47,9 +43,14 @@ export function createApp() {
     }
   });
 
-  // Operator routes mount first so the guards run once for every /api/ops/* route.
-  app.use('/api/ops', requireAuth, requireRole('OPERATOR'), opsRouter);
-  app.use('/api', apiRouter);
+  // Module routers — created per createApp() call so tests don't stack mounts.
+  const api = Router();
+  const ops = Router();
+
+  api.use('/hubs', requireAuth, hubsRouter);
+
+  app.use('/api/ops', requireAuth, requireRole('OPERATOR'), ops);
+  app.use('/api', api);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

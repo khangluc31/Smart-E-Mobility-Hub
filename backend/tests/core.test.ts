@@ -165,7 +165,7 @@ describe('T-03 AC-3 NFR-05 error handler', () => {
   it('T-03 AC-3 AppError keeps status/code/nextActions/alternatives', async () => {
     const err = conflict('RESOURCE_TAKEN', 'Taken.', {
       nextActions: ['Pick another'],
-      alternatives: [{ type: 'hub', hubId: 'metro' }],
+      alternatives: [{ type: 'hub', hubId: 'metro', reason: 'Try this hub instead.' }],
     });
     const res = await request(appThatThrows(err)).get('/boom');
     expect(res.status).toBe(409);
