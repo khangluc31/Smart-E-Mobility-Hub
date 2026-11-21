@@ -2,17 +2,9 @@
 // DB-free on purpose: the error handler that writes the D-22 audit row lives in
 // errorHandler.ts so this file never imports core/db (keeps core cycle-free).
 
-export interface Alternative {
-  type: string;
-  hubId?: string;
-  hubName?: string;
-  id?: string;
-  batteryPct?: number;
-  free?: number;
-  start?: string;
-  end?: string;
-  reason?: string;
-}
+// Re-exported from types/common so existing imports from './errors' keep working.
+import type { Alternative } from '../types/common';
+export type { Alternative };
 
 export interface ErrorBody {
   code: string;
