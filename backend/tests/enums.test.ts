@@ -55,6 +55,14 @@ describe('T-03 AC-11 enum mirror matches Prisma', () => {
     expect(frontend.equals(backend)).toBe(true);
   });
 
+  it('T-04 frontend types files are byte-identical to backend (common.ts, hubs.ts)', () => {
+    for (const file of ['common.ts', 'hubs.ts']) {
+      const be = readFileSync(join(__dirname, `../src/types/${file}`));
+      const fe = readFileSync(join(__dirname, `../../frontend/src/types/${file}`));
+      expect(fe.equals(be), `${file} mismatch`).toBe(true);
+    }
+  });
+
   it('T-03 AC-11 mirror types equal the Prisma enum unions (type-level)', () => {
     expectTypeOf<E.Role>().toEqualTypeOf<Prisma.Role>();
     expectTypeOf<E.RentalVehicleStatus>().toEqualTypeOf<Prisma.RentalVehicleStatus>();
