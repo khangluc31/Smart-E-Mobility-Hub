@@ -1,5 +1,5 @@
 import { describe, it, expect, expectTypeOf } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as Prisma from '@prisma/client';
 import * as E from '../src/types/enums';
@@ -55,8 +55,12 @@ describe('T-03 AC-11 enum mirror matches Prisma', () => {
     expect(frontend.equals(backend)).toBe(true);
   });
 
-  it('T-04 frontend types files are byte-identical to backend (common.ts, hubs.ts)', () => {
-    for (const file of ['common.ts', 'hubs.ts']) {
+  it('T-04/T-05 every backend types file except express.d.ts has a byte-identical frontend twin', () => {
+    const files = readdirSync(join(__dirname, '../src/types')).filter(
+      (f) => f.endsWith('.ts') && f !== 'express.d.ts',
+    );
+    expect(files.length).toBeGreaterThanOrEqual(4);
+    for (const file of files) {
       const be = readFileSync(join(__dirname, `../src/types/${file}`));
       const fe = readFileSync(join(__dirname, `../../frontend/src/types/${file}`));
       expect(fe.equals(be), `${file} mismatch`).toBe(true);
