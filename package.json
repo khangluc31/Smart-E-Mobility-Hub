@@ -14,7 +14,8 @@
     "build": "npm run build -w backend && npm run build -w frontend",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "check:cycles": "madge --circular --extensions ts backend/src"
+    "check:cycles": "madge --circular --extensions ts backend/src",
+    "mock-sensor": "tsx backend/scripts/mock-sensor.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",
