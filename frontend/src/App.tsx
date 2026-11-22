@@ -1,49 +1,180 @@
-import { useQuery } from '@tanstack/react-query';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
+// Root route table (ARCHITECTURE §13, CONTRACTS §16).
 
-// replaced by lib/api.ts in T-05
-const API_URL = import.meta.env.VITE_API_URL ?? '/api';
+import { Navigate, Route, Routes } from 'react-router-dom';
+import { useAuth } from '@/context/AuthContext';
+import { RequireAuth } from '@/components/layout/RequireAuth';
+import { RequireRole } from '@/components/layout/RequireRole';
+import { StudentLayout } from '@/components/layout/StudentLayout';
+import { OperatorLayout } from '@/components/layout/OperatorLayout';
+import { TodoPage } from '@/components/common/TodoPage';
+import { NotFound } from '@/components/common/NotFound';
+import { Login } from '@/pages/Login';
+import { Register } from '@/pages/Register';
+import { HubList } from '@/pages/student/HubList';
+import { HubDetail } from '@/pages/student/HubDetail';
+import { Skeleton } from '@/components/ui/skeleton';
 
-interface HealthResponse {
-  status: string;
-  db: string;
-  jobsEnabled: boolean;
-  serverNow: string;
+function HomeRedirect() {
+  const { user, isLoading } = useAuth();
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4" aria-busy="true">
+        <Skeleton className="h-24 w-full max-w-md" />
+      </div>
+    );
+  }
+
+  if (!user) return <Navigate to="/login" replace />;
+  return <Navigate to={user.role === 'OPERATOR' ? '/ops' : '/app/hubs'} replace />;
 }
 
-function App() {
-  const { data, isError } = useQuery<HealthResponse>({
-    queryKey: ['health'],
-    queryFn: async () => {
-      const res = await fetch(`${API_URL}/health`);
-      if (!res.ok) throw new Error('Backend unreachable');
-      return res.json() as Promise<HealthResponse>;
-    },
-    refetchInterval: 5000,
-  });
-
-  const isOk = data?.status === 'ok';
-
+export function App() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background p-4">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle>Smart E-Mobility Hub</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-medium">Backend:</span>
-            <Badge variant={isError ? 'destructive' : isOk ? 'secondary' : 'outline'}>
-              {isError ? 'unreachable' : isOk ? 'ok' : 'loading…'}
-            </Badge>
-          </div>
-          {data && (
-            <p className="text-xs text-muted-foreground mt-2">Server time: {data.serverNow}</p>
-          )}
-        </CardContent>
-      </Card>
-    </div>
+    <Routes>
+      <Route path="/" element={<HomeRedirect />} />
+      <Route path="/login" element={<Login />} />
+      <Route path="/register" element={<Register />} />
+
+      {/* Student routes */}
+      <Route path="/app" element={<RequireAuth />}>
+        <Route element={<StudentLayout />}>
+          <Route index element={<Navigate to="/app/hubs" replace />} />
+          <Route path="hubs" element={<HubList />} />
+          <Route path="hubs/:hubId" element={<HubDetail />} />
+          <Route
+            path="vehicles"
+            element={
+              <TodoPage
+                title="Vehicle Search & Recommendations"
+                area="rental vehicles & reservations"
+                owner="M4"
+              />
+            }
+          />
+          <Route
+            path="reservations"
+            element={
+              <TodoPage
+                title="My Reservations & History"
+                area="vehicle reservations"
+                owner="M4"
+              />
+            }
+          />
+          <Route
+            path="parking"
+            element={
+              <TodoPage
+                title="Parking Booking"
+                area="parking reservations"
+                owner="M4"
+              />
+            }
+          />
+          <Route
+            path="charging"
+            element={
+              <TodoPage
+                title="Charging Requests & Advance Booking"
+                area="charging module"
+                owner="M6"
+              />
+            }
+          />
+          <Route
+            path="my-vehicles"
+            element={
+              <TodoPage
+                title="My Private EVs"
+                area="private EV registration & combined booking"
+                owner="M4"
+              />
+            }
+          />
+        </Route>
+      </Route>
+
+      {/* Operator routes (FR-61) */}
+      <Route path="/ops" element={<RequireAuth />}>
+        <Route element={<RequireRole role="OPERATOR" />}>
+          <Route element={<OperatorLayout />}>
+            <Route
+              index
+              element={
+                <TodoPage
+                  title="Operator Dashboard"
+                  area="network monitoring & Hub drill-down"
+                  owner="M6"
+                />
+              }
+            />
+            <Route
+              path="alerts"
+              element={
+                <TodoPage
+                  title="Operational Alerts"
+                  area="monitoring & alerts"
+                  owner="M6"
+                />
+              }
+            />
+            <Route
+              path="incidents"
+              element={
+                <TodoPage
+                  title="Incidents & Maintenance"
+                  area="incident lifecycle & recovery"
+                  owner="M6"
+                />
+              }
+            />
+            <Route
+              path="charging"
+              element={
+                <TodoPage
+                  title="Charging Queue & Schedule"
+                  area="priority charging & overrides"
+                  owner="M6"
+                />
+              }
+            />
+            <Route
+              path="redistribution"
+              element={
+                <TodoPage
+                  title="Vehicle Redistribution"
+                  area="imbalance detection & redistribution tasks"
+                  owner="M2"
+                />
+              }
+            />
+            <Route
+              path="simulation"
+              element={
+                <TodoPage
+                  title="What-if Simulation"
+                  area="snapshot simulation & recommendations"
+                  owner="M2"
+                />
+              }
+            />
+            <Route
+              path="demo"
+              element={
+                <TodoPage
+                  title="Telemetry Demo Controls"
+                  area="simulated sensor feed & fault injection"
+                  owner="M1"
+                />
+              }
+            />
+          </Route>
+        </Route>
+      </Route>
+
+      <Route path="*" element={<NotFound />} />
+    </Routes>
   );
 }
 
