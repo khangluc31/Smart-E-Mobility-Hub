@@ -1,5 +1,4 @@
-import dotenv from 'dotenv';
-dotenv.config();
+import 'dotenv/config'; // must be first: core/config reads process.env at import time
 
 import { createApp } from './app';
 import { config } from './core/config';
