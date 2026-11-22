@@ -21,6 +21,7 @@ export default defineConfig({
       thresholds: {
         'src/core/**': { lines: 70 },
         'src/modules/hubs/**': { lines: 70 },
+        'src/telemetry/**': { lines: 70 },
       },
     },
   },
