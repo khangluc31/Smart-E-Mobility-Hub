@@ -9,6 +9,7 @@ export type DbClient = typeof db | Tx;
 // Lockable rows (ARCHITECTURE §4.1). The map is the ONLY source of table names —
 // lockRow never interpolates caller input into SQL.
 const LOCKABLE_TABLES = {
+  hub: 'hub',
   rental_vehicle: 'rental_vehicle',
   parking_space: 'parking_space',
   charging_point: 'charging_point',

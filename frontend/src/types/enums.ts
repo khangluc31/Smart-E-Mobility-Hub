@@ -162,7 +162,13 @@ export const NOTIFICATION_TYPES = [
 export type NotificationType = (typeof NOTIFICATION_TYPES)[number];
 
 // audit_log.action values. Starts with the two core actions; modules add theirs via M1.
-export const AUDIT_ACTIONS = ['SECURITY_DENIED', 'INVALID_TRANSITION'] as const;
+export const AUDIT_ACTIONS = [
+  'SECURITY_DENIED',
+  'INVALID_TRANSITION',
+  'TELEMETRY_DEMO_STALL',
+  'TELEMETRY_DEMO_FAULT',
+  'TELEMETRY_DEMO_BATTERY',
+] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
 // Simulation scenario templates (stored inside sim_scenario.conditions JSON, not a DB enum).
