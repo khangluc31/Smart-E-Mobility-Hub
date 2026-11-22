@@ -3,8 +3,11 @@ import 'dotenv/config'; // must be first: core/config reads process.env at impor
 import { createApp } from './app';
 import { config } from './core/config';
 import { startJobs, stopJobs } from './core/scheduler';
+import { registerTelemetryJobs } from './telemetry/telemetry.jobs';
 
 const app = createApp();
+
+registerTelemetryJobs();
 
 const server = app.listen(config.PORT, () => {
   console.log(`[server] listening on http://localhost:${config.PORT}`);

@@ -5,6 +5,7 @@ import { db } from './core/db';
 import { requireAuth, requireRole } from './core/auth';
 import { errorHandler, notFoundHandler } from './core/errorHandler';
 import { hubsRouter } from './modules/hubs/hubs.routes';
+import { telemetryOpsRouter, telemetryRouter } from './telemetry/telemetry.routes';
 
 export function createApp() {
   const app = express();
@@ -47,6 +48,10 @@ export function createApp() {
   const api = Router();
   const ops = Router();
 
+  // Telemetry ingestion (CONTRACTS §14) — X-Telemetry-Key header, no JWT.
+  app.use('/api/telemetry', telemetryRouter);
+
+  ops.use('/telemetry', telemetryOpsRouter);
   api.use('/hubs', requireAuth, hubsRouter);
 
   app.use('/api/ops', requireAuth, requireRole('OPERATOR'), ops);
