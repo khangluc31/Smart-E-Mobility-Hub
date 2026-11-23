@@ -35,11 +35,9 @@ function rel(now: Date, offsetMs: number): Date {
   return new Date(now.getTime() + offsetMs);
 }
 
-// ---- resetDb ----
+// ---- truncateAll & resetDb ----
 
-export async function resetDb(): Promise<void> {
-  const now = new Date();
-
+export async function truncateAll(): Promise<void> {
   // TRUNCATE all application tables (audit_log trigger blocks DELETE).
   await db.$executeRawUnsafe(`
     TRUNCATE TABLE
@@ -54,6 +52,12 @@ export async function resetDb(): Promise<void> {
       "user", hub
     RESTART IDENTITY CASCADE
   `);
+}
+
+export async function resetDb(): Promise<void> {
+  const now = new Date();
+
+  await truncateAll();
 
   // ---- users ----
   await db.user.createMany({
