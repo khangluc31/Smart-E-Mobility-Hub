@@ -37,3 +37,9 @@ export interface VehicleRecommendation {
   destination: DestinationSuitability;
   alternativeDestinations: Alternative[];
 }
+
+// TODO(M6): becomes ChargingRequestView | null with the charging module (CONTRACTS §4)
+export interface VehicleReturnResult {
+  reservation: VehicleReservation;
+  chargingRequest: null;
+}

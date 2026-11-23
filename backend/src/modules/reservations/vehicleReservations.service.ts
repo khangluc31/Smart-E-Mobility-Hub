@@ -8,14 +8,16 @@ import {
 } from '@prisma/client';
 import { config } from '../../core/config';
 import { db, lockRow, type DbClient, type Tx } from '../../core/db';
-import { badRequest, conflict, notFound } from '../../core/errors';
+import { AppError, badRequest, conflict, notFound } from '../../core/errors';
 import { events } from '../../core/events';
 import { withIdempotency } from '../../core/idempotency';
 import { notify } from '../../core/notify';
 import { assertTransition } from '../../core/stateMachine';
 import { addMinutes } from '../../core/time';
+import { isDegraded } from '../hubs/hubs.metrics';
+import { alternativeHubs } from '../hubs/hubs.service';
 import type { Alternative } from '../../types/common';
-import type { VehicleReservation } from '../../types/reservations';
+import type { VehicleReservation, VehicleReturnResult } from '../../types/reservations';
 import { isVehicleCharging, toRentalVehicleDto } from './vehicles.service';
 
 // Named transaction pool/wait constants so 50 concurrent reservation requests on
@@ -339,6 +341,56 @@ export async function getCurrent(
 }
 
 /**
+ * Shared lock-and-re-read helper (ARCHITECTURE §4.1, T-11/T-12 Rule 2):
+ * 1. Unlocked read of the reservation to discover `rentalVehicleId` and verify ownership (404).
+ * 2. Lock `rental_vehicle` first.
+ * 3. Optional callback to lock a secondary resource (`parking_space`) while respecting
+ *    the global `rental_vehicle -> parking_space -> vehicle_reservation` lock order.
+ * 4. Lock `vehicle_reservation` and re-read; retry once if `rentalVehicleId` drifted.
+ */
+async function lockOwnedReservation<TExtra = undefined>(
+  tx: Tx,
+  userId: string,
+  id: string,
+  afterVehicleLock?: (vehicle: PrismaRentalVehicle) => Promise<TExtra>,
+): Promise<{
+  reservation: PrismaVehicleReservation;
+  vehicle: PrismaRentalVehicle;
+  extra: TExtra;
+}> {
+  for (let attempt = 0; attempt < LOCK_RETRY_ATTEMPTS; attempt++) {
+    const unlocked = await tx.vehicleReservation.findUnique({ where: { id } });
+    if (!unlocked || unlocked.userId !== userId) {
+      throw notFound('Vehicle reservation');
+    }
+
+    await lockRow(tx, 'rental_vehicle', unlocked.rentalVehicleId);
+    const vehicle = await tx.rentalVehicle.findUniqueOrThrow({
+      where: { id: unlocked.rentalVehicleId },
+    });
+
+    const extra = afterVehicleLock
+      ? await afterVehicleLock(vehicle)
+      : (undefined as TExtra);
+
+    await lockRow(tx, 'vehicle_reservation', id);
+
+    const reread = await tx.vehicleReservation.findUniqueOrThrow({ where: { id } });
+    if (reread.userId !== userId) {
+      throw notFound('Vehicle reservation');
+    }
+
+    if (reread.rentalVehicleId === unlocked.rentalVehicleId) {
+      return { reservation: reread, vehicle, extra };
+    }
+  }
+
+  throw conflict('RESOURCE_TAKEN', 'Reservation was modified concurrently.', {
+    nextActions: ['Reload and try again.'],
+  });
+}
+
+/**
  * FR-08, Rule 8 & Rule 9: Cancel a CONFIRMED vehicle reservation.
  * Lock order: vehicle first, then reservation (with re-read & 1-time retry if vehicle changed).
  * If CONFIRMED and `expiresAt <= now`, commits the expiry first and throws 409 HOLD_EXPIRED.
@@ -349,39 +401,7 @@ export async function cancelReservation(
   now: Date = new Date(),
 ): Promise<VehicleReservation> {
   const outcome = await db.$transaction(async (tx) => {
-    let lockedVehicleId: string | null = null;
-    let res: PrismaVehicleReservation | null = null;
-
-    for (let attempt = 0; attempt < LOCK_RETRY_ATTEMPTS; attempt++) {
-      const unlocked = await tx.vehicleReservation.findUnique({ where: { id } });
-      if (!unlocked || unlocked.userId !== userId) {
-        throw notFound('Vehicle reservation');
-      }
-
-      await lockRow(tx, 'rental_vehicle', unlocked.rentalVehicleId);
-      await lockRow(tx, 'vehicle_reservation', id);
-
-      const reread = await tx.vehicleReservation.findUniqueOrThrow({ where: { id } });
-      if (reread.userId !== userId) {
-        throw notFound('Vehicle reservation');
-      }
-
-      if (reread.rentalVehicleId === unlocked.rentalVehicleId) {
-        lockedVehicleId = unlocked.rentalVehicleId;
-        res = reread;
-        break;
-      }
-    }
-
-    if (!res || !lockedVehicleId) {
-      throw conflict('RESOURCE_TAKEN', 'Reservation was modified concurrently.', {
-        nextActions: ['Reload and try again.'],
-      });
-    }
-
-    const vehicle = await tx.rentalVehicle.findUniqueOrThrow({
-      where: { id: lockedVehicleId },
-    });
+    const { reservation: res, vehicle } = await lockOwnedReservation(tx, userId, id);
 
     // Rule 8: expired-but-not-yet-flipped CONFIRMED hold -> expire and commit, then throw HOLD_EXPIRED
     if (res.status === 'CONFIRMED' && res.expiresAt.getTime() <= now.getTime()) {
@@ -429,6 +449,285 @@ export async function cancelReservation(
   }
 
   return outcome.dto;
+}
+
+/**
+ * FR-11, ARCHITECTURE §6.2, T-12 Rule 3:
+ * Pick up a reserved vehicle within the hold window.
+ * Lock order: `rental_vehicle` → current `parking_space` (if any) → `vehicle_reservation`.
+ * Frees the former FLEET space (OCCUPIED → FREE; UNAVAILABLE stays UNAVAILABLE).
+ */
+export async function pickUp(
+  userId: string,
+  id: string,
+  now: Date = new Date(),
+): Promise<VehicleReservation> {
+  const outcome = await db.$transaction(async (tx) => {
+    const { reservation: res, vehicle } = await lockOwnedReservation(
+      tx,
+      userId,
+      id,
+      async (lockedVeh) => {
+        if (lockedVeh.parkingSpaceId) {
+          await lockRow(tx, 'parking_space', lockedVeh.parkingSpaceId);
+        }
+        return undefined;
+      },
+    );
+
+    // Step 2: reservation must be CONFIRMED (else 409 INVALID_STATE_TRANSITION + D-22 audit)
+    if (res.status !== 'CONFIRMED') {
+      assertTransition('reservation', res.status, 'ACTIVE');
+    }
+
+    // Step 3: CONFIRMED but hold expired -> expire & commit, then throw 409 HOLD_EXPIRED
+    if (res.expiresAt.getTime() <= now.getTime()) {
+      await applyHoldExpiryInTx(tx, res, vehicle);
+      return { kind: 'EXPIRED' as const, hubId: res.hubId };
+    }
+
+    // Step 4: FAULTY vehicle -> 409 NOT_ELIGIBLE (no state change)
+    if (vehicle.status === 'FAULTY') {
+      throw conflict('NOT_ELIGIBLE', 'This vehicle has been reported faulty.', {
+        nextActions: ['Search and reserve another available vehicle.'],
+      });
+    }
+
+    // Step 5: transitions & updates (reservation, vehicle, former FLEET space)
+    assertTransition('reservation', res.status, 'ACTIVE');
+    assertTransition('rentalVehicle', vehicle.status, 'IN_USE');
+
+    const formerSpaceId = vehicle.parkingSpaceId;
+
+    const updatedRes = await tx.vehicleReservation.update({
+      where: { id: res.id },
+      data: {
+        status: 'ACTIVE',
+        pickedUpAt: now,
+        startBatteryPct: vehicle.batteryPct,
+      },
+    });
+
+    const updatedVehicle = await tx.rentalVehicle.update({
+      where: { id: vehicle.id },
+      data: {
+        status: 'IN_USE',
+        parkingSpaceId: null,
+      },
+    });
+
+    if (formerSpaceId) {
+      const space = await tx.parkingSpace.findUnique({
+        where: { id: formerSpaceId },
+      });
+      if (space && space.status === 'OCCUPIED') {
+        assertTransition('parkingSpace', space.status, 'FREE');
+        await tx.parkingSpace.update({
+          where: { id: space.id },
+          data: { status: 'FREE' },
+        });
+      }
+    }
+
+    const chargingSet = await isVehicleCharging(tx, [updatedVehicle.id]);
+    return {
+      kind: 'ACTIVE' as const,
+      hubId: updatedRes.hubId,
+      dto: toReservationDto(
+        updatedRes,
+        updatedVehicle,
+        now,
+        chargingSet.has(updatedVehicle.id),
+      ),
+    };
+  });
+
+  events.emit('RESERVATION_CHANGED', { hubId: outcome.hubId });
+
+  if (outcome.kind === 'EXPIRED') {
+    throwHoldExpired();
+  }
+
+  return outcome.dto;
+}
+
+export interface ReturnVehicleInput {
+  hubId: string;
+  requestCharging?: unknown;
+}
+
+/**
+ * FR-12, BR-02, BR-04, BR-10, BR-13, D-14, D-16, D-17, T-12 Rule 4:
+ * Return an ACTIVE rental to any non-degraded Hub with a free FLEET MOTORCYCLE space.
+ * Uses `FOR UPDATE SKIP LOCKED` to claim a free FLEET space without double-allocation.
+ */
+export async function returnVehicle(
+  userId: string,
+  id: string,
+  input: ReturnVehicleInput,
+  now: Date = new Date(),
+): Promise<VehicleReturnResult> {
+  // Step 1: pre-transaction validation (no state change)
+  // TODO(M6): D-13 charging on return — the charging ticket replaces this
+  if (input.requestCharging !== undefined && input.requestCharging !== null) {
+    throw badRequest(
+      "Charging on return isn't available yet.",
+      'requestCharging',
+      ['Return the vehicle without requestCharging for now.'],
+    );
+  }
+
+  const returnHub = await db.hub.findUnique({ where: { id: input.hubId } });
+  if (!returnHub) {
+    throw badRequest(`Unknown Hub "${input.hubId}".`, 'hubId', [
+      'Choose an existing Hub ID from GET /api/hubs.',
+    ]);
+  }
+
+  if (
+    isDegraded(
+      returnHub.lastTelemetryAt,
+      now,
+      config.STALLED_FEED_INTERVALS,
+      config.TELEMETRY_INTERVAL_SEC,
+    )
+  ) {
+    const alternatives = await alternativeHubs(
+      {
+        need: 'FLEET_PARKING',
+        vehicleClass: 'MOTORCYCLE',
+        excludeHubId: returnHub.id,
+      },
+      now,
+      db,
+    );
+    throw new AppError(400, 'VALIDATION_ERROR', 'Hub data is stale.', {
+      nextActions:
+        alternatives.length > 0
+          ? ['Return the vehicle to one of the alternative Hubs.']
+          : ['Wait for telemetry to resume or try another Hub.'],
+      alternatives,
+      details: { field: 'hubId' },
+    });
+  }
+
+  // Step 2–5: atomic return transaction
+  const outcome = await db.$transaction(async (tx) => {
+    const {
+      reservation: res,
+      vehicle,
+      extra: freeSpaceId,
+    } = await lockOwnedReservation<string | null>(tx, userId, id, async () => {
+      const freeSpaces = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM parking_space
+        WHERE "hubId" = ${returnHub.id}
+          AND pool = 'FLEET'
+          AND "vehicleClass" = 'MOTORCYCLE'
+          AND status = 'FREE'
+          AND "reservedForTaskId" IS NULL
+        ORDER BY id
+        LIMIT 1
+        FOR UPDATE SKIP LOCKED
+      `;
+      return freeSpaces[0]?.id ?? null;
+    });
+
+    // Step 3: check ACTIVE -> COMPLETED before HUB_FULL so finished rentals never report HUB_FULL
+    assertTransition('reservation', res.status, 'COMPLETED');
+
+    // Step 5 (faulty guard): FAULTY vehicle during ride -> 409 NOT_ELIGIBLE (incident flow closes it)
+    if (vehicle.status === 'FAULTY') {
+      throw conflict(
+        'NOT_ELIGIBLE',
+        'This vehicle is marked faulty and cannot be returned through the normal flow.',
+        {
+          nextActions: ['Contact operations; the incident flow handles faulty rentals.'],
+        },
+      );
+    }
+
+    // Step 4: no free FLEET space -> 409 HUB_FULL + alternatives; transaction rolls back cleanly
+    if (!freeSpaceId) {
+      const alternatives = await alternativeHubs(
+        {
+          need: 'FLEET_PARKING',
+          vehicleClass: 'MOTORCYCLE',
+          excludeHubId: returnHub.id,
+        },
+        now,
+        tx,
+      );
+      const nextActions =
+        alternatives.length > 0
+          ? ['Return the vehicle to one of the alternative Hubs.']
+          : ['No Hub has free FLEET parking space right now; try again shortly.'];
+      throw conflict(
+        'HUB_FULL',
+        `Hub "${returnHub.name}" has no free FLEET motorcycle parking spaces.`,
+        {
+          nextActions,
+          alternatives,
+        },
+      );
+    }
+
+    // Step 5: space FREE -> OCCUPIED; vehicle IN_USE -> AVAILABLE | LOW_BATTERY; reservation ACTIVE -> COMPLETED
+    assertTransition('parkingSpace', 'FREE', 'OCCUPIED');
+    await tx.parkingSpace.update({
+      where: { id: freeSpaceId },
+      data: { status: 'OCCUPIED' },
+    });
+
+    // BR-02 & D-17: battery comes from the vehicle row (telemetry), never from the request body
+    const nextVehicleStatus =
+      vehicle.batteryPct >= config.MIN_RENTAL_BATTERY_PCT
+        ? 'AVAILABLE'
+        : 'LOW_BATTERY';
+    assertTransition('rentalVehicle', vehicle.status, nextVehicleStatus);
+
+    const updatedVehicle = await tx.rentalVehicle.update({
+      where: { id: vehicle.id },
+      data: {
+        hubId: returnHub.id,
+        parkingSpaceId: freeSpaceId,
+        status: nextVehicleStatus,
+      },
+    });
+
+    const updatedRes = await tx.vehicleReservation.update({
+      where: { id: res.id },
+      data: {
+        status: 'COMPLETED',
+        returnedAt: now,
+        returnHubId: returnHub.id,
+        endBatteryPct: vehicle.batteryPct,
+        endReason: 'RETURNED',
+      },
+    });
+
+    const hubIds =
+      res.hubId === returnHub.id ? [res.hubId] : [res.hubId, returnHub.id];
+
+    const chargingSet = await isVehicleCharging(tx, [updatedVehicle.id]);
+    return {
+      hubIds,
+      result: {
+        reservation: toReservationDto(
+          updatedRes,
+          updatedVehicle,
+          now,
+          chargingSet.has(updatedVehicle.id),
+        ),
+        chargingRequest: null,
+      } satisfies VehicleReturnResult,
+    };
+  });
+
+  for (const hubId of outcome.hubIds) {
+    events.emit('RESERVATION_CHANGED', { hubId });
+  }
+
+  return outcome.result;
 }
 
 /**
