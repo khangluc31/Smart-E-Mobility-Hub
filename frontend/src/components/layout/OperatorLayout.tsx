@@ -4,6 +4,7 @@ import { Link, NavLink, Outlet } from 'react-router-dom';
 import { KeyRound, LogOut, MapPin } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useHealth } from '@/hooks/useHealth';
+import { NotificationBell } from '@/components/common/NotificationBell';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
@@ -27,15 +28,18 @@ export function OperatorLayout() {
     <div className="min-h-screen flex flex-col md:flex-row bg-background text-foreground">
       <aside className="w-full md:w-60 shrink-0 border-b md:border-b-0 md:border-r bg-card flex flex-col justify-between">
         <div className="p-4 space-y-4">
-          <div>
-            <Link to="/ops" className="font-semibold text-base tracking-tight block">
-              E-Mobility Operations
-            </Link>
-            {user && (
-              <p className="text-xs text-muted-foreground mt-0.5 truncate">
-                Operator: {user.displayName}
-              </p>
-            )}
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <Link to="/ops" className="font-semibold text-base tracking-tight block">
+                E-Mobility Operations
+              </Link>
+              {user && (
+                <p className="text-xs text-muted-foreground mt-0.5 truncate">
+                  Operator: {user.displayName}
+                </p>
+              )}
+            </div>
+            <NotificationBell />
           </div>
 
           <nav aria-label="Operator navigation" className="flex flex-wrap md:flex-col gap-1">

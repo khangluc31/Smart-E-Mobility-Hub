@@ -4,6 +4,7 @@ import { Link, NavLink, Outlet } from 'react-router-dom';
 import { KeyRound, LogOut, Shield } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useHealth } from '@/hooks/useHealth';
+import { NotificationBell } from '@/components/common/NotificationBell';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
@@ -44,6 +45,7 @@ export function StudentLayout() {
                 {user.displayName}
               </span>
             )}
+            <NotificationBell />
             <Button asChild variant="outline" size="sm">
               <Link to="/app/change-password">
                 <KeyRound className="h-3.5 w-3.5" />
