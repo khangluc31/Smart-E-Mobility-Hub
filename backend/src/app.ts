@@ -8,6 +8,8 @@ import { authRouter } from './modules/auth/auth.routes';
 import { hubsRouter } from './modules/hubs/hubs.routes';
 import { notificationsRouter } from './modules/notifications/notifications.routes';
 import {
+  parkingReservationsRouter,
+  parkingRouter,
   vehicleReservationsRouter,
   vehiclesRouter,
 } from './modules/reservations/reservations.routes';
@@ -68,6 +70,13 @@ export function createApp(opts?: { corsOrigins?: readonly string[] }) {
     requireAuth,
     requireRole('STUDENT'),
     vehicleReservationsRouter,
+  );
+  api.use('/parking', requireAuth, requireRole('STUDENT'), parkingRouter);
+  api.use(
+    '/parking-reservations',
+    requireAuth,
+    requireRole('STUDENT'),
+    parkingReservationsRouter,
   );
 
   app.use('/api/ops', requireAuth, requireRole('OPERATOR'), ops);

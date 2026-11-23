@@ -4,6 +4,7 @@
 import { config } from '../../core/config';
 import { registerJob } from '../../core/scheduler';
 import { expireVehicleHolds } from './vehicleReservations.service';
+import { parkingTick } from './parkingReservations.service';
 
 export const RESERVATIONS_TICK_JOB = 'reservations.tick';
 
@@ -17,6 +18,7 @@ export function registerReservationJobs(): void {
       config.TELEMETRY_INTERVAL_SEC * 1000,
       async (now: Date) => {
         await expireVehicleHolds(now);
+        await parkingTick(now);
       },
     );
   } catch {

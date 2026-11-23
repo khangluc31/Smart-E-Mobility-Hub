@@ -1,7 +1,7 @@
 // Vehicle reservation and recommendation DTOs (CONTRACTS §1 / §4).
 // Imports only ./enums, ./hubs, and ./common so it can be copied byte-for-byte to the frontend.
 
-import type { ReservationStatus, VehicleReservationEndReason } from './enums';
+import type { ReservationStatus, VehicleClass, VehicleReservationEndReason } from './enums';
 import type { RentalVehicle } from './hubs';
 import type { Alternative } from './common';
 
@@ -42,4 +42,27 @@ export interface VehicleRecommendation {
 export interface VehicleReturnResult {
   reservation: VehicleReservation;
   chargingRequest: null;
+}
+
+export interface ParkingReservation {
+  id: string;
+  status: ReservationStatus;
+  hubId: string;
+  parkingSpaceId: string;
+  vehicleClass: VehicleClass;
+  privateEvId: string | null;
+  windowStart: string;
+  windowEnd: string;
+  expiresAt: string;
+  claimedAt: string | null;
+  bookingGroupId: string | null;
+  serverNow: string;
+}
+
+export interface ParkingAvailability {
+  hubId: string;
+  vehicleClass: VehicleClass;
+  free: number;
+  total: number;
+  alternatives: Alternative[];
 }
