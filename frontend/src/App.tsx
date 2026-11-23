@@ -10,6 +10,7 @@ import { TodoPage } from '@/components/common/TodoPage';
 import { NotFound } from '@/components/common/NotFound';
 import { Login } from '@/pages/Login';
 import { Register } from '@/pages/Register';
+import { ChangePassword } from '@/pages/ChangePassword';
 import { HubList } from '@/pages/student/HubList';
 import { HubDetail } from '@/pages/student/HubDetail';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -36,8 +37,9 @@ export function App() {
       <Route path="/login" element={<Login />} />
       <Route path="/register" element={<Register />} />
 
-      {/* Student routes */}
+      {/* Student routes (+ shared /app/change-password outside StudentLayout) */}
       <Route path="/app" element={<RequireAuth />}>
+        <Route path="change-password" element={<ChangePassword />} />
         <Route element={<StudentLayout />}>
           <Route index element={<Navigate to="/app/hubs" replace />} />
           <Route path="hubs" element={<HubList />} />
