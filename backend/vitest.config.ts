@@ -23,6 +23,7 @@ export default defineConfig({
         'src/modules/auth/**': { lines: 70 },
         'src/modules/hubs/**': { lines: 70 },
         'src/modules/notifications/**': { lines: 70 },
+        'src/modules/private-evs/**': { lines: 70 },
         'src/modules/reservations/**': { lines: 70 },
         'src/telemetry/**': { lines: 70 },
       },

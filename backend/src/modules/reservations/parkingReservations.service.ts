@@ -214,6 +214,30 @@ async function applyParkingExpiryInTx(
 }
 
 /**
+ * T-14 Rule 4: Return the subset of `evIds` that currently have a CONFIRMED or ACTIVE
+ * parking reservation (single batched query, no N+1).
+ */
+export async function activeParkingEvIds(
+  client: DbClient,
+  evIds: readonly string[],
+): Promise<Set<string>> {
+  if (evIds.length === 0) return new Set();
+  const rows = await client.parkingReservation.findMany({
+    where: {
+      privateEvId: { in: [...evIds] },
+      status: { in: ['CONFIRMED', 'ACTIVE'] },
+    },
+    select: { privateEvId: true },
+    distinct: ['privateEvId'],
+  });
+  const active = new Set<string>();
+  for (const row of rows) {
+    if (row.privateEvId) active.add(row.privateEvId);
+  }
+  return active;
+}
+
+/**
  * FR-14, D-16: Count PUBLIC spaces of the class at the Hub that are not UNAVAILABLE
  * and have no overlapping CONFIRMED/ACTIVE reservation for `[from, to)`.
  */
@@ -325,12 +349,26 @@ export async function reserveParking(
   }
 
   const runReserve = async (tx: Tx): Promise<ParkingReservation> => {
-    // Step 2: optional privateEvId ownership + soft-delete + class check
+    // Step 2: optional privateEvId ownership + soft-delete + class check with FOR SHARE
+    // Lock order: private_ev -> parking_space -> parking_reservation (T-14 Rule 7).
+    // FOR SHARE serialises against private-evs' FOR UPDATE (edit/remove) without blocking
+    // concurrent reservations on the same EV.
     // read-only; private-evs (T-14) imports reservations, not the other way round
     if (input.privateEvId !== undefined) {
-      const ev = await tx.privateEv.findUnique({
-        where: { id: input.privateEvId },
-      });
+      const evRows = await tx.$queryRaw<
+        Array<{
+          id: string;
+          ownerId: string;
+          vehicleClass: VehicleClass;
+          deletedAt: Date | null;
+        }>
+      >`
+        SELECT id, "ownerId", "vehicleClass", "deletedAt"
+        FROM private_ev
+        WHERE id = ${input.privateEvId}
+        FOR SHARE
+      `;
+      const ev = evRows[0];
       if (!ev || ev.ownerId !== userId || ev.deletedAt !== null) {
         throw notFound('Private EV');
       }
