@@ -4,6 +4,7 @@ import request from 'supertest';
 import jwt from 'jsonwebtoken';
 import { Prisma } from '@prisma/client';
 import { loadConfig, config } from '../src/core/config';
+import { createApp } from '../src/app';
 import {
   AppError,
   conflict,
@@ -84,6 +85,47 @@ describe('T-03 AC-1 NFR-17 config', () => {
     expect(() => loadConfig({ NODE_ENV: 'production' })).toThrow(/JWT_SECRET/);
     expect(loadConfig({ NODE_ENV: 'production', JWT_SECRET: 's' }).JWT_SECRET).toBe('s');
     expect(loadConfig({}).JWT_SECRET).toBe('dev-insecure-jwt-secret');
+  });
+
+  it('T-08 AC-4 loadConfig parses comma-separated CORS_ORIGIN into trimmed CORS_ORIGINS and keeps default', () => {
+    const def = loadConfig({});
+    expect(def.CORS_ORIGIN).toBe('http://localhost:5173');
+    expect(def.CORS_ORIGINS).toEqual(['http://localhost:5173']);
+
+    const multi = loadConfig({
+      CORS_ORIGIN: ' https://smart-emobility.vercel.app , http://localhost:5173 , , https://preview-123.vercel.app ',
+    });
+    expect(multi.CORS_ORIGINS).toEqual([
+      'https://smart-emobility.vercel.app',
+      'http://localhost:5173',
+      'https://preview-123.vercel.app',
+    ]);
+  });
+
+  it('T-08 AC-4 listed CORS origin gets Access-Control-Allow-Origin and unknown origin does not', async () => {
+    const c = loadConfig({
+      CORS_ORIGIN: 'https://smart-emobility.vercel.app, http://localhost:5173',
+    });
+    const app = createApp({ corsOrigins: c.CORS_ORIGINS });
+
+    const allowedVercel = await request(app)
+      .options('/api/hubs')
+      .set('Origin', 'https://smart-emobility.vercel.app')
+      .set('Access-Control-Request-Method', 'GET');
+    expect(allowedVercel.headers['access-control-allow-origin']).toBe(
+      'https://smart-emobility.vercel.app',
+    );
+
+    const allowedLocal = await request(app)
+      .get('/api/health')
+      .set('Origin', 'http://localhost:5173');
+    expect(allowedLocal.headers['access-control-allow-origin']).toBe('http://localhost:5173');
+
+    const blocked = await request(app)
+      .options('/api/hubs')
+      .set('Origin', 'https://untrusted.example.com')
+      .set('Access-Control-Request-Method', 'GET');
+    expect(blocked.headers['access-control-allow-origin']).toBeUndefined();
   });
 });
 

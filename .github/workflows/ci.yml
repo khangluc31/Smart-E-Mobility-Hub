@@ -64,3 +64,6 @@ jobs:
 
       - name: Check circular imports
         run: npm run check:cycles
+
+      - name: Build Docker image
+        run: docker build -f backend/Dockerfile .
