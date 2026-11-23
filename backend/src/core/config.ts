@@ -38,12 +38,20 @@ export function loadConfig(env: Env) {
     JWT_SECRET = 'dev-insecure-jwt-secret';
   }
 
+  const CORS_ORIGIN = stringFrom(env, 'CORS_ORIGIN', 'http://localhost:5173');
+  const CORS_ORIGINS = Object.freeze(
+    CORS_ORIGIN.split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0),
+  );
+
   const config = {
     // runtime
     NODE_ENV,
     PORT: numberFrom(env, 'PORT', 3000),
     DATABASE_URL: stringFrom(env, 'DATABASE_URL', ''),
-    CORS_ORIGIN: stringFrom(env, 'CORS_ORIGIN', 'http://localhost:5173'),
+    CORS_ORIGIN,
+    CORS_ORIGINS,
     JOBS_ENABLED: boolFrom(env, 'JOBS_ENABLED', false),
     JWT_SECRET,
     JWT_EXPIRES_IN: stringFrom(env, 'JWT_EXPIRES_IN', '8h'),

@@ -7,14 +7,15 @@ import { errorHandler, notFoundHandler } from './core/errorHandler';
 import { hubsRouter } from './modules/hubs/hubs.routes';
 import { telemetryOpsRouter, telemetryRouter } from './telemetry/telemetry.routes';
 
-export function createApp() {
+export function createApp(opts?: { corsOrigins?: readonly string[] }) {
   const app = express();
+  const allowedOrigins = opts?.corsOrigins ?? config.CORS_ORIGINS;
 
   app.use(express.json());
   app.use(
     cors({
       origin: (origin, callback) => {
-        if (!origin || origin === config.CORS_ORIGIN) {
+        if (!origin || allowedOrigins.includes(origin)) {
           callback(null, true);
         } else {
           callback(null, false);
