@@ -7,6 +7,10 @@ import { errorHandler, notFoundHandler } from './core/errorHandler';
 import { authRouter } from './modules/auth/auth.routes';
 import { hubsRouter } from './modules/hubs/hubs.routes';
 import { notificationsRouter } from './modules/notifications/notifications.routes';
+import {
+  vehicleReservationsRouter,
+  vehiclesRouter,
+} from './modules/reservations/reservations.routes';
 import { telemetryOpsRouter, telemetryRouter } from './telemetry/telemetry.routes';
 
 export function createApp(opts?: { corsOrigins?: readonly string[] }) {
@@ -58,6 +62,13 @@ export function createApp(opts?: { corsOrigins?: readonly string[] }) {
   api.use('/auth', authRouter);
   api.use('/hubs', requireAuth, hubsRouter);
   api.use('/notifications', requireAuth, notificationsRouter);
+  api.use('/vehicles', requireAuth, requireRole('STUDENT'), vehiclesRouter);
+  api.use(
+    '/vehicle-reservations',
+    requireAuth,
+    requireRole('STUDENT'),
+    vehicleReservationsRouter,
+  );
 
   app.use('/api/ops', requireAuth, requireRole('OPERATOR'), ops);
   app.use('/api', api);
