@@ -12,7 +12,7 @@ import {
   requireString,
 } from '../../core/errors';
 import { parseIdempotencyKey } from '../../core/idempotency';
-import { RENTAL_VEHICLE_TYPES } from '../../types/enums';
+import { RENTAL_VEHICLE_TYPES, VEHICLE_CLASSES } from '../../types/enums';
 import { recommend, searchVehicles } from './vehicles.service';
 import {
   cancelReservation,
@@ -22,6 +22,14 @@ import {
   reserveVehicle,
   returnVehicle,
 } from './vehicleReservations.service';
+import {
+  cancelParking,
+  changeWindow,
+  claimParking,
+  getAvailability,
+  leaveParking,
+  reserveParking,
+} from './parkingReservations.service';
 
 type AsyncHandler = (req: Request, res: Response, next: NextFunction) => Promise<void>;
 function wrap(fn: AsyncHandler) {
@@ -145,5 +153,92 @@ vehicleReservationsRouter.post(
       requestCharging: body['requestCharging'],
     });
     res.status(200).json(result);
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// Parking availability & parking reservations (CONTRACTS §5, FR-14..FR-18)
+// ---------------------------------------------------------------------------
+
+export const parkingRouter = Router();
+
+// GET /api/parking/availability (FR-14)
+parkingRouter.get(
+  '/availability',
+  wrap(async (req, res) => {
+    const q = req.query as Record<string, unknown>;
+    const hubId = requireString(q, 'hubId', { trim: true, min: 1 });
+    const vehicleClass = requireEnum(q, 'vehicleClass', VEHICLE_CLASSES);
+    const from = requireIsoDate(q, 'from');
+    const to = requireIsoDate(q, 'to');
+
+    const result = await getAvailability({ hubId, vehicleClass, from, to });
+    res.status(200).json(result);
+  }),
+);
+
+export const parkingReservationsRouter = Router();
+
+// POST /api/parking-reservations (FR-15, BR-10, BR-13, NFR-08)
+parkingReservationsRouter.post(
+  '/',
+  wrap(async (req, res) => {
+    const body = asObject(req.body);
+    const hubId = requireString(body, 'hubId', { trim: true, min: 1 });
+    const vehicleClass = requireEnum(body, 'vehicleClass', VEHICLE_CLASSES);
+    const privateEvId = optional(requireString)(body, 'privateEvId', { trim: true, min: 1 });
+    const windowStart = requireIsoDate(body, 'windowStart');
+    const windowEnd = requireIsoDate(body, 'windowEnd');
+    const idemKey = parseIdempotencyKey(req.headers['idempotency-key']);
+
+    const reservation = await reserveParking(
+      req.user!.id,
+      { hubId, vehicleClass, privateEvId, windowStart, windowEnd },
+      { idemKey },
+    );
+    res.status(201).json(reservation);
+  }),
+);
+
+// POST /api/parking-reservations/:id/cancel (FR-16)
+parkingReservationsRouter.post(
+  '/:id/cancel',
+  wrap(async (req, res) => {
+    const cancelled = await cancelParking(req.user!.id, req.params.id as string);
+    res.status(200).json(cancelled);
+  }),
+);
+
+// PATCH /api/parking-reservations/:id (FR-17)
+parkingReservationsRouter.patch(
+  '/:id',
+  wrap(async (req, res) => {
+    const body = asObject(req.body);
+    const windowStart = requireIsoDate(body, 'windowStart');
+    const windowEnd = requireIsoDate(body, 'windowEnd');
+
+    const updated = await changeWindow(req.user!.id, req.params.id as string, {
+      windowStart,
+      windowEnd,
+    });
+    res.status(200).json(updated);
+  }),
+);
+
+// POST /api/parking-reservations/:id/claim (FR-18)
+parkingReservationsRouter.post(
+  '/:id/claim',
+  wrap(async (req, res) => {
+    const claimed = await claimParking(req.user!.id, req.params.id as string);
+    res.status(200).json(claimed);
+  }),
+);
+
+// POST /api/parking-reservations/:id/leave (FR-18)
+parkingReservationsRouter.post(
+  '/:id/leave',
+  wrap(async (req, res) => {
+    const completed = await leaveParking(req.user!.id, req.params.id as string);
+    res.status(200).json(completed);
   }),
 );
