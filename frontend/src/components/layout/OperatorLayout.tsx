@@ -1,7 +1,7 @@
 // Desktop-first sidebar layout for Operator screens (ARCHITECTURE §13, FR-61).
 
 import { Link, NavLink, Outlet } from 'react-router-dom';
-import { LogOut, MapPin } from 'lucide-react';
+import { KeyRound, LogOut, MapPin } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useHealth } from '@/hooks/useHealth';
 import { Button } from '@/components/ui/button';
@@ -71,6 +71,12 @@ export function OperatorLayout() {
               <Link to="/app/hubs">
                 <MapPin className="h-3.5 w-3.5" />
                 <span>Hubs view</span>
+              </Link>
+            </Button>
+            <Button asChild variant="outline" size="sm" className="flex-1">
+              <Link to="/app/change-password">
+                <KeyRound className="h-3.5 w-3.5" />
+                <span>Change password</span>
               </Link>
             </Button>
             <Button type="button" variant="outline" size="sm" onClick={logout}>

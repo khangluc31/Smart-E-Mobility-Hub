@@ -28,6 +28,7 @@ export interface AuthContextValue {
   login: (identifier: string, password: string) => Promise<User>;
   register: (identifier: string, password: string, displayName: string) => Promise<User>;
   logout: () => void;
+  clearMustChangePassword: () => void;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -120,7 +121,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .catch((err: unknown) => {
         if (!active) return;
         // 401 -> logged out (also triggered by api.ts unauthorizedHandler).
-        // Any other failure (404 before M3's auth module exists, network error) -> keep stored user.
+        // Transient network / server failures keep the stored user.
         if (err instanceof ApiError && err.status === 401) {
           logout();
         }
@@ -161,9 +162,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const clearMustChangePassword = useCallback(() => {
+    setUser((prev) => {
+      if (!prev) return null;
+      const updated: User = { ...prev, mustChangePassword: false };
+      try {
+        localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(updated));
+      } catch {
+        // ignore storage error
+      }
+      return updated;
+    });
+  }, []);
+
   const value = useMemo<AuthContextValue>(
-    () => ({ user, token, isLoading, login, register, logout }),
-    [user, token, isLoading, login, register, logout],
+    () => ({ user, token, isLoading, login, register, logout, clearMustChangePassword }),
+    [user, token, isLoading, login, register, logout, clearMustChangePassword],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
