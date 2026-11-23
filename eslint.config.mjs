@@ -4,7 +4,7 @@ import reactHooks from 'eslint-plugin-react-hooks';
 import reactRefresh from 'eslint-plugin-react-refresh';
 
 export default tseslint.config(
-  { ignores: ['**/dist/', '**/node_modules/', '**/coverage/', 'backend/prisma/'] },
+  { ignores: ['**/dist/', '**/node_modules/', '**/coverage/'] },
 
   // Base: recommended JS + TS rules for all files
   js.configs.recommended,
