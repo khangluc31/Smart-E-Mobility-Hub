@@ -18,7 +18,9 @@ import {
   cancelReservation,
   changeVehicle,
   getCurrent,
+  pickUp,
   reserveVehicle,
+  returnVehicle,
 } from './vehicleReservations.service';
 
 type AsyncHandler = (req: Request, res: Response, next: NextFunction) => Promise<void>;
@@ -119,5 +121,29 @@ vehicleReservationsRouter.patch(
 
     const updated = await changeVehicle(req.user!.id, req.params.id as string, vehicleId);
     res.status(200).json(updated);
+  }),
+);
+
+// POST /api/vehicle-reservations/:id/pickup (FR-11)
+vehicleReservationsRouter.post(
+  '/:id/pickup',
+  wrap(async (req, res) => {
+    const active = await pickUp(req.user!.id, req.params.id as string);
+    res.status(200).json(active);
+  }),
+);
+
+// POST /api/vehicle-reservations/:id/return (FR-12, FR-19)
+vehicleReservationsRouter.post(
+  '/:id/return',
+  wrap(async (req, res) => {
+    const body = asObject(req.body);
+    const hubId = requireString(body, 'hubId', { trim: true, min: 1 });
+
+    const result = await returnVehicle(req.user!.id, req.params.id as string, {
+      hubId,
+      requestCharging: body['requestCharging'],
+    });
+    res.status(200).json(result);
   }),
 );
