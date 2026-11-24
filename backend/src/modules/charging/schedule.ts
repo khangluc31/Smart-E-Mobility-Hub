@@ -144,8 +144,8 @@ export function projectSchedule(input: {
     const classOrdered = ordered.filter((q) => q.vehicleClass === vc);
 
     // Record 1-based queuePosition per Hub and class even if no usable points exist
-    for (let i = 0; i < classOrdered.length; i++) {
-      byRequest.set(classOrdered[i].id, {
+    for (const [i, q] of classOrdered.entries()) {
+      byRequest.set(q.id, {
         queuePosition: i + 1,
         pointId: null,
         estimatedStart: null,
@@ -185,8 +185,8 @@ export function projectSchedule(input: {
     while (remaining.length > 0) {
       // Pick the point with earliest freeAt (tie: point id ASC)
       let best = pointStates[0];
-      for (let i = 1; i < pointStates.length; i++) {
-        const candidate = pointStates[i];
+      if (!best) break;
+      for (const candidate of pointStates) {
         if (
           candidate.freeAtMs < best.freeAtMs ||
           (candidate.freeAtMs === best.freeAtMs && compareStrings(candidate.id, best.id) < 0)
@@ -213,8 +213,7 @@ export function projectSchedule(input: {
       let pickedStartMs = 0;
       let pickedEndMs = 0;
 
-      for (let i = 0; i < remaining.length; i++) {
-        const item = remaining[i];
+      for (const [i, item] of remaining.entries()) {
         const startMs = Math.max(best.freeAtMs, item.req.desiredTime.getTime());
         const endMs = startMs + item.durationMs;
         if (endMs <= nbMs) {
@@ -227,6 +226,7 @@ export function projectSchedule(input: {
 
       if (pickedIdx >= 0) {
         const [picked] = remaining.splice(pickedIdx, 1);
+        if (!picked) break;
         const start = new Date(pickedStartMs);
         const end = new Date(pickedEndMs);
         const assignment: ProjectedAssignment = {
