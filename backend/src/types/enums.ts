@@ -170,6 +170,8 @@ export const AUDIT_ACTIONS = [
   'TELEMETRY_DEMO_BATTERY',
   'CHARGING_WEIGHTS_SET',
   'CHARGING_WEIGHTS_RESET',
+  'CHARGING_DISPATCHED',
+  'CHARGING_OVERRIDE',
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
