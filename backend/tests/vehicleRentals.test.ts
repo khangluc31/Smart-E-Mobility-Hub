@@ -636,11 +636,11 @@ describe('FR-12 AC-8 return validation: unknown/degraded Hub, requestCharging, w
     expect(degRes.body.error.details?.field).toBe('hubId');
     expect(degRes.body.error.alternatives).toBeDefined();
 
-    // 3. requestCharging present -> 400 details.field: 'requestCharging'
+    // 3. Invalid requestCharging shape -> 400 details.field: 'requestCharging'
     const rcRes = await request(app)
       .post('/api/vehicle-reservations/VR-VAL-1/return')
       .set('Authorization', student1Token)
-      .send({ hubId: 'metro', requestCharging: { targetPct: 80 } });
+      .send({ hubId: 'metro', requestCharging: 'invalid' });
 
     expect(rcRes.status).toBe(400);
     expect(rcRes.body.error.code).toBe('VALIDATION_ERROR');
