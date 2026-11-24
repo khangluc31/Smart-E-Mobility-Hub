@@ -5,12 +5,16 @@
 import { useEffect, useState } from 'react';
 
 let clockOffsetMs = 0;
+const listeners = new Set<() => void>();
 
 export function syncServerClock(serverNow: string | null | undefined): void {
   if (!serverNow) return;
   const parsed = Date.parse(serverNow);
   if (Number.isFinite(parsed)) {
     clockOffsetMs = parsed - Date.now();
+    for (const listener of listeners) {
+      listener();
+    }
   }
 }
 
@@ -22,41 +26,39 @@ export function useServerNowMs(tickMs = 1000): number {
   const [nowMs, setNowMs] = useState<number>(() => getServerNowMs());
 
   useEffect(() => {
-    const id = window.setInterval(() => {
-      setNowMs(getServerNowMs());
-    }, tickMs);
-    return () => window.clearInterval(id);
+    const update = () => setNowMs(getServerNowMs());
+    listeners.add(update);
+    const id = window.setInterval(update, tickMs);
+    return () => {
+      listeners.delete(update);
+      window.clearInterval(id);
+    };
   }, [tickMs]);
 
   return nowMs;
-}
-
-function computeMsLeft(expiresAt: string | null | undefined): number {
-  if (!expiresAt) return 0;
-  const target = Date.parse(expiresAt);
-  if (!Number.isFinite(target)) return 0;
-  return Math.max(0, target - getServerNowMs());
 }
 
 export function useCountdown(
   expiresAt: string | null | undefined,
   serverNow?: string | null,
 ): { msLeft: number; expired: boolean } {
-  const [msLeft, setMsLeft] = useState<number>(() => computeMsLeft(expiresAt));
+  // serverNow is synced in query/mutation functions via syncServerClock; keep parameter for callers.
+  void serverNow;
+  const nowMs = useServerNowMs(1000);
 
-  useEffect(() => {
-    setMsLeft(computeMsLeft(expiresAt));
-    if (!expiresAt) return;
+  if (!expiresAt) {
+    return { msLeft: 0, expired: false };
+  }
 
-    const id = window.setInterval(() => {
-      setMsLeft(computeMsLeft(expiresAt));
-    }, 1000);
-    return () => window.clearInterval(id);
-  }, [expiresAt, serverNow]);
+  const target = Date.parse(expiresAt);
+  if (!Number.isFinite(target)) {
+    return { msLeft: 0, expired: false };
+  }
 
+  const msLeft = Math.max(0, target - nowMs);
   return {
     msLeft,
-    expired: Boolean(expiresAt) && msLeft <= 0,
+    expired: msLeft <= 0,
   };
 }
 

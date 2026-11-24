@@ -107,9 +107,10 @@ export function MyReservations() {
     changeOpen && Boolean(current?.hubId),
   );
 
+  const currentVehicleId = current?.vehicle.id;
   const otherVehicles = useMemo(
-    () => (swapCandidates ?? []).filter((v) => v.id !== current?.vehicle.id),
-    [swapCandidates, current?.vehicle.id],
+    () => (swapCandidates ?? []).filter((v) => v.id !== currentVehicleId),
+    [swapCandidates, currentVehicleId],
   );
 
   // History tabs & infinite query (FR-10)
