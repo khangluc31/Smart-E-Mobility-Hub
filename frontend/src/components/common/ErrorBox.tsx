@@ -11,6 +11,7 @@ export interface ErrorBoxProps {
   error: unknown;
   title?: string;
   className?: string;
+  onSelectAlternative?: (alt: Alternative) => void;
 }
 
 function normaliseError(error: unknown): {
@@ -41,7 +42,12 @@ function normaliseError(error: unknown): {
   };
 }
 
-export function ErrorBox({ error, title = 'Something went wrong', className }: ErrorBoxProps) {
+export function ErrorBox({
+  error,
+  title = 'Something went wrong',
+  className,
+  onSelectAlternative,
+}: ErrorBoxProps) {
   if (!error) return null;
   const { code, message, nextActions, alternatives } = normaliseError(error);
 
@@ -73,6 +79,30 @@ export function ErrorBox({ error, title = 'Something went wrong', className }: E
             <p className="font-medium text-xs uppercase tracking-wide opacity-80">Alternatives</p>
             <ul className="mt-1 space-y-1">
               {alternatives.map((alt, idx) => {
+                if (onSelectAlternative) {
+                  const label =
+                    alt.type === 'hub'
+                      ? (alt.hubName ?? alt.hubId ?? 'Hub')
+                      : alt.type === 'rentalVehicle'
+                        ? `${alt.id ?? 'Vehicle'}${alt.batteryPct !== undefined ? ` (${alt.batteryPct}%)` : ''}`
+                        : alt.start && alt.end
+                          ? `${new Date(alt.start).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} – ${new Date(alt.end).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+                          : 'Alternative';
+                  return (
+                    <li key={idx}>
+                      <button
+                        type="button"
+                        onClick={() => onSelectAlternative(alt)}
+                        className="inline-flex min-h-9 flex-wrap items-center gap-1 rounded border border-destructive/30 bg-background/80 px-2.5 py-1 text-left text-xs font-medium text-foreground hover:bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                      >
+                        <span>{label}</span>
+                        <span className="font-normal text-muted-foreground">— {alt.reason}</span>
+                        <ArrowRight className="h-3.5 w-3.5 shrink-0" />
+                      </button>
+                    </li>
+                  );
+                }
+
                 if (alt.type === 'hub' && alt.hubId) {
                   return (
                     <li key={idx}>
@@ -87,7 +117,6 @@ export function ErrorBox({ error, title = 'Something went wrong', className }: E
                     </li>
                   );
                 }
-                // TODO(M4/M6): make rentalVehicle and time alternatives interactive in reservations/charging pages
                 return (
                   <li key={idx} className="text-xs">
                     {alt.reason}
