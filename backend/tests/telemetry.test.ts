@@ -410,9 +410,13 @@ describe('T-06 Telemetry: validation, ingestion, generator, demo endpoints', () 
     ]);
 
     expect(crM1.currentPct).toBe(100);
-    expect(crM1.status).toBe('CHARGING'); // D-17: status unchanged
+    // Telemetry changes only physical facts (D-17); afterCommit calls endSession to end the session (ARCHITECTURE §7.3 step 4).
+    expect(crM1.status).toBe('COMPLETED');
+    expect(crM1.endReason).toBe('TARGET_REACHED');
     expect(crM2.currentPct).toBe(60); // QUEUED untouched
     expect(crC1.currentPct).toBe(90); // capped at targetPct=90
+    expect(crC1.status).toBe('COMPLETED');
+    expect(crC1.endReason).toBe('TARGET_REACHED');
   });
 
   // ---------------------------------------------------------------------------
