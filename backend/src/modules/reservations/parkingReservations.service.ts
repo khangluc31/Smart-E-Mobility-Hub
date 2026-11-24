@@ -439,6 +439,7 @@ export async function reserveParking(
         expiresAt,
         bookingGroupId: opts.bookingGroupId ?? null,
         idempotencyKey: opts.idemKey ?? null,
+        createdAt: now,
       },
     });
 

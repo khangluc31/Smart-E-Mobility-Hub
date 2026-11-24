@@ -66,3 +66,16 @@ export interface ParkingAvailability {
   total: number;
   alternatives: Alternative[];
 }
+
+export const HISTORY_TYPES = ['all', 'vehicle', 'parking', 'charging'] as const;
+export type HistoryType = (typeof HISTORY_TYPES)[number];
+
+// TODO(M6): add { kind: 'charging'; at: string; item: ChargingRequestView }
+export type HistoryItem =
+  | { kind: 'vehicle'; at: string; item: VehicleReservation }
+  | { kind: 'parking'; at: string; item: ParkingReservation };
+
+export interface HistoryPage {
+  items: HistoryItem[];
+  nextCursor: string | null;
+}
