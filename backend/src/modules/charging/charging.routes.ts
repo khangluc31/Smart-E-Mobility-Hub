@@ -1,17 +1,22 @@
-// Charging routes: student lifecycle routes (CONTRACTS §8.1, FR-20/22/23/24)
-// and operator engine routes (CONTRACTS §8.2, FR-48/49/50).
+// Charging routes: student lifecycle & advance booking routes (CONTRACTS §8.1, FR-20..24)
+// and operator engine, dispatch & override routes (CONTRACTS §8.2, FR-48..52).
 
 import { Router, type NextFunction, type Request, type Response } from 'express';
+import { config } from '../../core/config';
 import {
   badRequest,
   optional,
   requireBoolean,
   requireEnum,
   requireIsoDate,
+  requireNumber,
   requireString,
   unauthenticated,
 } from '../../core/errors';
+import { parseIdempotencyKey } from '../../core/idempotency';
+import { CHARGING_OVERRIDE_ACTIONS } from '../../types/charging';
 import { CHARGING_VEHICLE_KINDS, VEHICLE_CLASSES } from '../../types/enums';
+import { bookAdvanceSlot, checkAvailability } from './advanceBooking.service';
 import {
   getQueue,
   getSchedule,
@@ -19,6 +24,7 @@ import {
   resetWeights,
   setWeights,
 } from './charging.service';
+import { dispatchFleet, overrideQueue } from './chargingOps.service';
 import {
   cancelRequest,
   getMine,
@@ -57,6 +63,52 @@ function requireStrictNumber(
 // ---------------------------------------------------------------------------
 // Student routes: mounted at /api/charging (requireAuth + requireRole('STUDENT'))
 // ---------------------------------------------------------------------------
+
+chargingRouter.get('/availability', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user) throw unauthenticated();
+    const query = req.query as Record<string, unknown>;
+    const hubId = requireString(query, 'hubId', { min: 1, trim: true });
+    const privateEvId = requireString(query, 'privateEvId', { min: 1, trim: true });
+    const slotStart = requireIsoDate(query, 'slotStart');
+    const targetPct = requireNumber(query, 'targetPct', { max: 100 });
+    if (targetPct <= 0) {
+      throw badRequest('targetPct must be greater than 0.', 'targetPct');
+    }
+    const data = await checkAvailability(req.user, {
+      hubId,
+      privateEvId,
+      slotStart,
+      targetPct,
+    });
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+});
+
+chargingRouter.post(
+  '/advance-bookings',
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      if (!req.user) throw unauthenticated();
+      const idemKey = parseIdempotencyKey(req.header('Idempotency-Key'));
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const privateEvId = requireString(body, 'privateEvId', { min: 1, trim: true });
+      const hubId = requireString(body, 'hubId', { min: 1, trim: true });
+      const slotStart = requireIsoDate(body, 'slotStart');
+      const targetPct = requireStrictNumber(body, 'targetPct', { gt: 0, max: 100 });
+      const created = await bookAdvanceSlot(
+        req.user,
+        { privateEvId, hubId, slotStart, targetPct },
+        { idemKey },
+      );
+      res.status(201).json(created);
+    } catch (err) {
+      next(err);
+    }
+  },
+);
 
 chargingRouter.post('/requests', async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -210,3 +262,74 @@ chargingOpsRouter.post(
     }
   },
 );
+
+chargingOpsRouter.post('/dispatch', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user) throw unauthenticated();
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const hubId = requireString(body, 'hubId', { min: 1, trim: true });
+    const targetPct =
+      body['targetPct'] !== undefined && body['targetPct'] !== null
+        ? requireStrictNumber(body, 'targetPct', { gt: 0, max: 100 })
+        : undefined;
+    const allLowBattery = optional(requireBoolean)(body, 'allLowBattery');
+    const rentalVehicleId = optional(requireString)(body, 'rentalVehicleId', {
+      min: 1,
+      trim: true,
+    });
+
+    if (allLowBattery === true && rentalVehicleId !== undefined) {
+      throw badRequest(
+        'Provide either rentalVehicleId or allLowBattery: true, not both.',
+        'allLowBattery',
+      );
+    }
+
+    if (allLowBattery === true) {
+      const data = await dispatchFleet(req.user, { hubId, allLowBattery: true, targetPct });
+      res.status(201).json(data);
+      return;
+    }
+
+    if (rentalVehicleId !== undefined) {
+      const data = await dispatchFleet(req.user, { hubId, rentalVehicleId, targetPct });
+      res.status(201).json(data);
+      return;
+    }
+
+    throw badRequest('Either rentalVehicleId or allLowBattery: true is required.', 'rentalVehicleId');
+  } catch (err) {
+    next(err);
+  }
+});
+
+chargingOpsRouter.post('/override', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    if (!req.user) throw unauthenticated();
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const action = requireEnum(body, 'action', CHARGING_OVERRIDE_ACTIONS);
+    const requestId = requireString(body, 'requestId', { min: 1, trim: true });
+    const reason = requireString(body, 'reason', {
+      min: config.OVERRIDE_REASON_MIN_CHARS,
+      trim: true,
+    });
+    const otherRequestId =
+      action === 'SWAP'
+        ? requireString(body, 'otherRequestId', { min: 1, trim: true })
+        : undefined;
+
+    if (action === 'SWAP' && otherRequestId === requestId) {
+      throw badRequest('otherRequestId must be different from requestId.', 'otherRequestId');
+    }
+
+    const data = await overrideQueue(req.user, {
+      action,
+      requestId,
+      otherRequestId,
+      reason,
+    });
+    res.json(data);
+  } catch (err) {
+    next(err);
+  }
+});
