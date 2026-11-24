@@ -82,3 +82,20 @@ export interface ChargingSchedule {
   generatedAt: string;
   points: ChargingSchedulePoint[];
 }
+
+export type SubmitChargingRequest =
+  | {
+      vehicleKind: 'PRIVATE';
+      privateEvId: string;
+      hubId: string;
+      targetPct: number;
+      desiredTime?: string;
+      neededBy?: string;
+    }
+  | {
+      vehicleKind: 'RENTAL';
+      rentalVehicleId: string;
+      hubId: string;
+      targetPct: number;
+      neededBy?: string;
+    };
