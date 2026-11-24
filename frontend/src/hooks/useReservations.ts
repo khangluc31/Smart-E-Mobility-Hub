@@ -6,10 +6,11 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { api } from '@/lib/api';
 import { POLL_INTERVAL_MS } from '@/lib/constants';
 import { syncServerClock } from '@/hooks/useServerClock';
-import type { RentalVehicleType, ReservationStatus, VehicleClass } from '@/types/enums';
+import type { RentalVehicleType, VehicleClass } from '@/types/enums';
 import type { RentalVehicle } from '@/types/hubs';
 import type {
   HistoryPage,
+  HistoryStatus,
   HistoryType,
   ParkingAvailability,
   ParkingReservation,
@@ -49,7 +50,7 @@ export interface ParkingAvailabilityQuery {
 
 export interface HistoryFilters {
   type?: HistoryType;
-  status?: ReservationStatus;
+  status?: HistoryStatus;
 }
 
 export function useVehicleSearch(filters: VehicleSearchFilters, enabled = true) {
@@ -114,7 +115,7 @@ export function useParkingAvailability(query: ParkingAvailabilityQuery | null, e
 
 function buildHistoryPath(params: {
   type?: HistoryType;
-  status?: ReservationStatus;
+  status?: HistoryStatus;
   cursor?: string | null;
 }): string {
   const search = new URLSearchParams();
@@ -266,13 +267,23 @@ export function usePickupVehicle() {
   });
 }
 
+export interface ReturnVehicleInput {
+  id: string;
+  hubId: string;
+  requestCharging?: {
+    targetPct: number;
+    neededBy?: string;
+  };
+}
+
 export function useReturnVehicle() {
   const queryClient = useQueryClient();
-  return useMutation<VehicleReturnResult, unknown, { id: string; hubId: string }>({
-    mutationFn: async ({ id, hubId }) => {
+  return useMutation<VehicleReturnResult, unknown, ReturnVehicleInput>({
+    mutationFn: async ({ id, hubId, requestCharging }) => {
+      const body = requestCharging ? { hubId, requestCharging } : { hubId };
       const res = await api.post<VehicleReturnResult>(
         `/vehicle-reservations/${encodeURIComponent(id)}/return`,
-        { hubId },
+        body,
       );
       syncServerClock(res.reservation.serverNow);
       return res;
