@@ -168,6 +168,8 @@ export const AUDIT_ACTIONS = [
   'TELEMETRY_DEMO_STALL',
   'TELEMETRY_DEMO_FAULT',
   'TELEMETRY_DEMO_BATTERY',
+  'CHARGING_WEIGHTS_SET',
+  'CHARGING_WEIGHTS_RESET',
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
