@@ -187,10 +187,14 @@ describe('T-06 checker', () => {
     expect(res.status).toBe(202);
     const get = (id: string) => db.chargingRequest.findUniqueOrThrow({ where: { id } });
     expect((await get('CR-M-001')).currentPct).toBe(77); // follows battery below target
+    expect((await get('CR-M-001')).status).toBe('CHARGING'); // below target stays CHARGING
     expect((await get('CR-C-001')).currentPct).toBe(90); // capped at targetPct
     expect((await get('CR-M-002')).currentPct).toBe(60); // QUEUED untouched
     expect((await get('CR-M-003')).currentPct).toBe(70); // SCHEDULED untouched
-    expect((await get('CR-C-001')).status).toBe('CHARGING');
+    // Telemetry changes only physical facts (D-17); afterCommit calls endSession once target is reached (ARCHITECTURE §7.3 step 4).
+    const crC1 = await get('CR-C-001');
+    expect(crC1.status).toBe('COMPLETED');
+    expect(crC1.endReason).toBe('TARGET_REACHED');
   });
 
   it('D-02 generator job skips stalled Hub, advances others', async () => {
