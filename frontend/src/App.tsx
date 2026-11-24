@@ -13,6 +13,10 @@ import { Register } from '@/pages/Register';
 import { ChangePassword } from '@/pages/ChangePassword';
 import { HubList } from '@/pages/student/HubList';
 import { HubDetail } from '@/pages/student/HubDetail';
+import { VehicleSearch } from '@/pages/student/VehicleSearch';
+import { MyReservations } from '@/pages/student/MyReservations';
+import { ParkingBooking } from '@/pages/student/ParkingBooking';
+import { MyVehicles } from '@/pages/student/MyVehicles';
 import { Skeleton } from '@/components/ui/skeleton';
 
 function HomeRedirect() {
@@ -44,36 +48,9 @@ export function App() {
           <Route index element={<Navigate to="/app/hubs" replace />} />
           <Route path="hubs" element={<HubList />} />
           <Route path="hubs/:hubId" element={<HubDetail />} />
-          <Route
-            path="vehicles"
-            element={
-              <TodoPage
-                title="Vehicle Search & Recommendations"
-                area="rental vehicles & reservations"
-                owner="M4"
-              />
-            }
-          />
-          <Route
-            path="reservations"
-            element={
-              <TodoPage
-                title="My Reservations & History"
-                area="vehicle reservations"
-                owner="M4"
-              />
-            }
-          />
-          <Route
-            path="parking"
-            element={
-              <TodoPage
-                title="Parking Booking"
-                area="parking reservations"
-                owner="M4"
-              />
-            }
-          />
+          <Route path="vehicles" element={<VehicleSearch />} />
+          <Route path="reservations" element={<MyReservations />} />
+          <Route path="parking" element={<ParkingBooking />} />
           <Route
             path="charging"
             element={
@@ -84,16 +61,7 @@ export function App() {
               />
             }
           />
-          <Route
-            path="my-vehicles"
-            element={
-              <TodoPage
-                title="My Private EVs"
-                area="private EV registration & combined booking"
-                owner="M4"
-              />
-            }
-          />
+          <Route path="my-vehicles" element={<MyVehicles />} />
         </Route>
       </Route>
 

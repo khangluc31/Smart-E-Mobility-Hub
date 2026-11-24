@@ -11,3 +11,6 @@ export const POLL_INTERVAL_MS = 5000;
 export const TELEMETRY_INTERVAL_SEC = 5;
 export const STALLED_FEED_INTERVALS = 3;
 
+// SPEC §3: maximum parking reservation window in hours (client-side hint only; server decides).
+export const PARKING_MAX_WINDOW_H = 12;
+
