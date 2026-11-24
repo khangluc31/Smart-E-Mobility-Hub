@@ -7,11 +7,13 @@ import { db, lockRow, type DbClient, type Tx } from '../../core/db';
 import { AppError, badRequest, conflict, forbidden, notFound } from '../../core/errors';
 import { events } from '../../core/events';
 import { notify } from '../../core/notify';
+import type { ListCursor } from '../../core/pagination';
 import { assertTransition } from '../../core/stateMachine';
 import { addMinutes } from '../../core/time';
 import type { ChargingRequestView } from '../../types/charging';
 import type {
   ChargingEndReason,
+  ChargingRequestStatus,
   ChargingVehicleKind,
   Role,
   VehicleClass,
@@ -543,4 +545,86 @@ export async function stopSession(
   }
 
   return toRequestView(ended, null, now);
+}
+
+// D-18: cancel a rental vehicle's QUEUED charging request inside the caller's reserve/change
+// transaction (lock order: rental_vehicle -> vehicle_reservation -> charging_request).
+// Never touches SCHEDULED or CHARGING requests. Notifies ownerId when present (not fleet dispatch).
+export async function cancelQueuedForVehicle(
+  tx: Tx,
+  rentalVehicleId: string,
+  now: Date = new Date(),
+): Promise<{ hubId: string; requestId: string } | null> {
+  const candidate = await tx.chargingRequest.findFirst({
+    where: {
+      rentalVehicleId,
+      status: 'QUEUED',
+    },
+    select: { id: true },
+  });
+  if (!candidate) {
+    return null;
+  }
+
+  await lockRow(tx, 'charging_request', candidate.id);
+  const req = await tx.chargingRequest.findUnique({ where: { id: candidate.id } });
+  if (!req || req.status !== 'QUEUED') {
+    return null;
+  }
+
+  assertTransition('chargingRequest', req.status, 'CANCELLED');
+  await tx.chargingRequest.update({
+    where: { id: req.id },
+    data: {
+      status: 'CANCELLED',
+      endedAt: now,
+    },
+  });
+
+  if (req.ownerId) {
+    await notify(tx, {
+      userId: req.ownerId,
+      type: 'CHARGING_CANCELLED',
+      title: 'Charging request cancelled',
+      body: `Your queued charging request for vehicle ${rentalVehicleId} at Hub ${req.hubId} was cancelled because the vehicle was reserved.`,
+      data: {
+        chargingRequestId: req.id,
+        rentalVehicleId,
+        hubId: req.hubId,
+        reason: 'VEHICLE_RESERVED',
+      },
+    });
+  }
+
+  return { hubId: req.hubId, requestId: req.id };
+}
+
+// FR-10: read-only charging history slice for GET /me/history (merged by reservations/history.service).
+export async function listChargingHistory(
+  client: DbClient,
+  userId: string,
+  opts: {
+    status?: ChargingRequestStatus;
+    cursor: ListCursor | null;
+    take: number;
+  },
+): Promise<ChargingRequest[]> {
+  const cursorWhere = opts.cursor
+    ? {
+        OR: [
+          { createdAt: { lt: opts.cursor.createdAt } },
+          { createdAt: opts.cursor.createdAt, id: { lt: opts.cursor.id } },
+        ],
+      }
+    : {};
+
+  return client.chargingRequest.findMany({
+    where: {
+      ownerId: userId,
+      ...(opts.status ? { status: opts.status } : {}),
+      ...cursorWhere,
+    },
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: opts.take,
+  });
 }
