@@ -3,6 +3,7 @@
 
 import {
   Prisma,
+  type ChargingRequest as PrismaChargingRequest,
   type RentalVehicle as PrismaRentalVehicle,
   type VehicleReservation as PrismaVehicleReservation,
 } from '@prisma/client';
@@ -14,8 +15,11 @@ import { withIdempotency } from '../../core/idempotency';
 import { notify } from '../../core/notify';
 import { assertTransition } from '../../core/stateMachine';
 import { addMinutes } from '../../core/time';
+import { buildHubProjection, toRequestView } from '../charging/charging.service';
+import { cancelQueuedForVehicle, createQueueRequest } from '../charging/chargingRequests.service';
 import { isDegraded } from '../hubs/hubs.metrics';
 import { alternativeHubs } from '../hubs/hubs.service';
+import type { ChargingRequestView } from '../../types/charging';
 import type { Alternative } from '../../types/common';
 import type { VehicleReservation, VehicleReturnResult } from '../../types/reservations';
 import { isVehicleCharging, toRentalVehicleDto } from './vehicles.service';
@@ -210,6 +214,9 @@ export async function reserveVehicle(
   now: Date = new Date(),
 ): Promise<VehicleReservation> {
   let targetHubId: string | null = null;
+  const cancelledChargingRef: { current: { hubId: string; requestId: string } | null } = {
+    current: null,
+  };
 
   try {
     const outcome = await db.$transaction(
@@ -266,6 +273,10 @@ export async function reserveVehicle(
               data: { status: 'RESERVED' },
             });
 
+            // D-18: reserving a vehicle that is QUEUED for charging cancels that queued request
+            // inside the same transaction (lock order: rental_vehicle -> vehicle_reservation -> charging_request).
+            cancelledChargingRef.current = await cancelQueuedForVehicle(tx, updatedVehicle.id, now);
+
             return {
               status: 201,
               body: toReservationDto(created, updatedVehicle, now, false),
@@ -281,6 +292,9 @@ export async function reserveVehicle(
 
     if (!outcome.replayed) {
       events.emit('RESERVATION_CHANGED', { hubId: outcome.body.hubId });
+      if (cancelledChargingRef.current) {
+        events.emit('CHARGING_QUEUE_CHANGED', { hubId: cancelledChargingRef.current.hubId });
+      }
     }
     return outcome.body;
   } catch (err: unknown) {
@@ -551,15 +565,21 @@ export async function pickUp(
   return outcome.dto;
 }
 
+export interface ReturnRequestChargingInput {
+  targetPct: number;
+  neededBy?: Date | null;
+}
+
 export interface ReturnVehicleInput {
   hubId: string;
-  requestCharging?: unknown;
+  requestCharging?: ReturnRequestChargingInput;
 }
 
 /**
- * FR-12, BR-02, BR-04, BR-10, BR-13, D-14, D-16, D-17, T-12 Rule 4:
+ * FR-12, BR-02, BR-04, BR-10, BR-13, D-13, D-14, D-16, D-17, T-12/T-19:
  * Return an ACTIVE rental to any non-degraded Hub with a free FLEET MOTORCYCLE space.
  * Uses `FOR UPDATE SKIP LOCKED` to claim a free FLEET space without double-allocation.
+ * Optionally queues a RENTAL charging request in the same transaction (all-or-nothing, D-13).
  */
 export async function returnVehicle(
   userId: string,
@@ -568,13 +588,25 @@ export async function returnVehicle(
   now: Date = new Date(),
 ): Promise<VehicleReturnResult> {
   // Step 1: pre-transaction validation (no state change)
-  // TODO(M6): D-13 charging on return — the charging ticket replaces this
-  if (input.requestCharging !== undefined && input.requestCharging !== null) {
-    throw badRequest(
-      "Charging on return isn't available yet.",
-      'requestCharging',
-      ['Return the vehicle without requestCharging for now.'],
-    );
+  if (input.requestCharging !== undefined) {
+    const { targetPct, neededBy } = input.requestCharging;
+    if (
+      typeof targetPct !== 'number' ||
+      !Number.isFinite(targetPct) ||
+      targetPct <= 0 ||
+      targetPct > 100
+    ) {
+      throw badRequest(
+        'requestCharging.targetPct must be greater than 0 and at most 100.',
+        'requestCharging.targetPct',
+      );
+    }
+    if (neededBy !== undefined && neededBy !== null && neededBy.getTime() <= now.getTime()) {
+      throw badRequest(
+        'requestCharging.neededBy must be in the future.',
+        'requestCharging.neededBy',
+      );
+    }
   }
 
   const returnHub = await db.hub.findUnique({ where: { id: input.hubId } });
@@ -705,29 +737,72 @@ export async function returnVehicle(
       },
     });
 
+    // D-13: optional charging on return in the same transaction (all-or-nothing).
+    let createdCharging: PrismaChargingRequest | null = null;
+    if (input.requestCharging !== undefined) {
+      if (input.requestCharging.targetPct <= vehicle.batteryPct) {
+        throw badRequest(
+          `Battery is already at ${vehicle.batteryPct}%; return without charging or pick a higher target.`,
+          'requestCharging.targetPct',
+          [
+            'Return the vehicle without charging.',
+            'Pick a targetPct higher than the current battery level.',
+          ],
+        );
+      }
+
+      createdCharging = await createQueueRequest(
+        tx,
+        {
+          requestedById: userId,
+          ownerId: userId,
+          vehicleKind: 'RENTAL',
+          rentalVehicleId: vehicle.id,
+          vehicleClass: 'MOTORCYCLE',
+          hubId: returnHub.id,
+          targetPct: input.requestCharging.targetPct,
+          currentPct: vehicle.batteryPct,
+          desiredTime: now,
+          neededBy: input.requestCharging.neededBy ?? null,
+        },
+        now,
+      );
+    }
+
     const hubIds =
       res.hubId === returnHub.id ? [res.hubId] : [res.hubId, returnHub.id];
 
     const chargingSet = await isVehicleCharging(tx, [updatedVehicle.id]);
     return {
       hubIds,
-      result: {
-        reservation: toReservationDto(
-          updatedRes,
-          updatedVehicle,
-          now,
-          chargingSet.has(updatedVehicle.id),
-        ),
-        chargingRequest: null,
-      } satisfies VehicleReturnResult,
+      reservation: toReservationDto(
+        updatedRes,
+        updatedVehicle,
+        now,
+        chargingSet.has(updatedVehicle.id),
+      ),
+      createdCharging,
     };
   });
+
+  // Compute projection before emitting so the 200 response carries QUEUED position/estimates.
+  let chargingRequest: ChargingRequestView | null = null;
+  if (outcome.createdCharging) {
+    const bundle = await buildHubProjection(db, outcome.createdCharging.hubId, now);
+    chargingRequest = toRequestView(outcome.createdCharging, bundle.projection, now);
+  }
 
   for (const hubId of outcome.hubIds) {
     events.emit('RESERVATION_CHANGED', { hubId });
   }
+  if (outcome.createdCharging) {
+    events.emit('CHARGING_QUEUE_CHANGED', { hubId: outcome.createdCharging.hubId });
+  }
 
-  return outcome.result;
+  return {
+    reservation: outcome.reservation,
+    chargingRequest,
+  };
 }
 
 /**
@@ -834,6 +909,9 @@ export async function changeVehicle(
       },
     });
 
+    // D-18: cancel any QUEUED charging request on the newly reserved vehicle.
+    const cancelledCharging = await cancelQueuedForVehicle(tx, updatedNewVehicle.id, now);
+
     const hubIds =
       res.hubId === updatedNewVehicle.hubId
         ? [res.hubId]
@@ -842,12 +920,16 @@ export async function changeVehicle(
     return {
       kind: 'CHANGED' as const,
       hubIds,
+      cancelledCharging,
       dto: toReservationDto(updatedRes, updatedNewVehicle, now, false),
     };
   });
 
   for (const hubId of outcome.hubIds) {
     events.emit('RESERVATION_CHANGED', { hubId });
+  }
+  if (outcome.kind === 'CHANGED' && outcome.cancelledCharging) {
+    events.emit('CHARGING_QUEUE_CHANGED', { hubId: outcome.cancelledCharging.hubId });
   }
 
   if (outcome.kind === 'EXPIRED') {

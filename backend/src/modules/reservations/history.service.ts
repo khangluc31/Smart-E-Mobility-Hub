@@ -1,34 +1,63 @@
-// Student reservation & rental history service (FR-10, UC-07 E1, CONTRACTS §6).
-// Read-only: merges vehicle_reservation and parking_reservation newest-first with
-// cursor pagination (`createdAt DESC, id DESC`) and batched vehicle/charging lookups.
+// Student reservation, rental & charging history service (FR-10, UC-07 E1, CONTRACTS §6, D-23).
+// Read-only: merges vehicle_reservation, parking_reservation, and charging_request newest-first
+// with cursor pagination (`createdAt DESC, id DESC`) and batched vehicle/charging/projection lookups.
 
 import type {
+  ChargingRequest as PrismaChargingRequest,
   ParkingReservation as PrismaParkingReservation,
   RentalVehicle as PrismaRentalVehicle,
   VehicleReservation as PrismaVehicleReservation,
 } from '@prisma/client';
 import { db, type DbClient } from '../../core/db';
 import { encodeCursor, type ListCursor } from '../../core/pagination';
-import type { ReservationStatus } from '../../types/enums';
-import type { HistoryItem, HistoryPage, HistoryType } from '../../types/reservations';
+import {
+  CHARGING_REQUEST_STATUSES,
+  RESERVATION_STATUSES,
+  type ChargingRequestStatus,
+  type ReservationStatus,
+} from '../../types/enums';
+import type {
+  HistoryItem,
+  HistoryPage,
+  HistoryStatus,
+  HistoryType,
+} from '../../types/reservations';
+import { buildHubProjection, toRequestView } from '../charging/charging.service';
+import { listChargingHistory } from '../charging/chargingRequests.service';
+import type { ScheduleProjection } from '../charging/schedule';
 import { toParkingDto } from './parkingReservations.service';
 import { toReservationDto } from './vehicleReservations.service';
 import { isVehicleCharging } from './vehicles.service';
 
 export interface HistoryQuery {
   type?: HistoryType;
-  status?: ReservationStatus;
+  status?: HistoryStatus;
   limit: number;
   cursor: ListCursor | null;
 }
 
 type RawCandidate =
   | { kind: 'vehicle'; createdAt: Date; id: string; row: PrismaVehicleReservation }
-  | { kind: 'parking'; createdAt: Date; id: string; row: PrismaParkingReservation };
+  | { kind: 'parking'; createdAt: Date; id: string; row: PrismaParkingReservation }
+  | { kind: 'charging'; createdAt: Date; id: string; row: PrismaChargingRequest };
+
+function asReservationStatus(status: HistoryStatus | undefined): ReservationStatus | undefined {
+  if (status !== undefined && (RESERVATION_STATUSES as readonly string[]).includes(status)) {
+    return status as ReservationStatus;
+  }
+  return undefined;
+}
+
+function asChargingStatus(status: HistoryStatus | undefined): ChargingRequestStatus | undefined {
+  if (status !== undefined && (CHARGING_REQUEST_STATUSES as readonly string[]).includes(status)) {
+    return status as ChargingRequestStatus;
+  }
+  return undefined;
+}
 
 /**
- * FR-10, UC-07 E1: Return the caller's own vehicle and parking reservations
- * ordered newest-first (`createdAt DESC, id DESC`) with cursor pagination.
+ * FR-10, UC-07 E1: Return the caller's own vehicle reservations, parking reservations,
+ * and charging requests ordered newest-first (`createdAt DESC, id DESC`) with cursor pagination.
  */
 export async function getHistory(
   userId: string,
@@ -37,14 +66,16 @@ export async function getHistory(
   client: DbClient = db,
 ): Promise<HistoryPage> {
   const type: HistoryType = query.type ?? 'all';
+  const reservationStatus = asReservationStatus(query.status);
+  const chargingStatus = asChargingStatus(query.status);
 
-  if (type === 'charging') {
-    // TODO(M6): charging items
-    return { items: [], nextCursor: null };
-  }
+  // Wider status filter: apply only to the kinds whose enum contains the requested status.
+  const statusAllowsReservation = query.status === undefined || reservationStatus !== undefined;
+  const statusAllowsCharging = query.status === undefined || chargingStatus !== undefined;
 
-  const includeVehicle = type === 'all' || type === 'vehicle';
-  const includeParking = type === 'all' || type === 'parking';
+  const includeVehicle = (type === 'all' || type === 'vehicle') && statusAllowsReservation;
+  const includeParking = (type === 'all' || type === 'parking') && statusAllowsReservation;
+  const includeCharging = (type === 'all' || type === 'charging') && statusAllowsCharging;
   const take = query.limit + 1;
 
   const cursorWhere = query.cursor
@@ -57,12 +88,12 @@ export async function getHistory(
     : {};
 
   // Plain Prisma orderBy: DB collation and JS string comparison agree for our cuid ids (lowercase alphanumeric).
-  const [vehicleRows, parkingRows] = await Promise.all([
+  const [vehicleRows, parkingRows, chargingRows] = await Promise.all([
     includeVehicle
       ? client.vehicleReservation.findMany({
           where: {
             userId,
-            ...(query.status ? { status: query.status } : {}),
+            ...(reservationStatus ? { status: reservationStatus } : {}),
             ...cursorWhere,
           },
           orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -73,13 +104,20 @@ export async function getHistory(
       ? client.parkingReservation.findMany({
           where: {
             userId,
-            ...(query.status ? { status: query.status } : {}),
+            ...(reservationStatus ? { status: reservationStatus } : {}),
             ...cursorWhere,
           },
           orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
           take,
         })
       : Promise.resolve<PrismaParkingReservation[]>([]),
+    includeCharging
+      ? listChargingHistory(client, userId, {
+          status: chargingStatus,
+          cursor: query.cursor,
+          take,
+        })
+      : Promise.resolve<PrismaChargingRequest[]>([]),
   ]);
 
   const merged: RawCandidate[] = [];
@@ -88,6 +126,9 @@ export async function getHistory(
   }
   for (const row of parkingRows) {
     merged.push({ kind: 'parking', createdAt: row.createdAt, id: row.id, row });
+  }
+  for (const row of chargingRows) {
+    merged.push({ kind: 'charging', createdAt: row.createdAt, id: row.id, row });
   }
 
   // Sort merged set by (createdAt DESC, id DESC) to match the per-table SQL order.
@@ -114,18 +155,39 @@ export async function getHistory(
     ),
   );
 
-  const [vehicles, chargingSet] =
+  // Build one hub projection per distinct Hub for kept live charging items (QUEUED / CHARGING).
+  const chargingHubIds = Array.from(
+    new Set(
+      kept
+        .filter(
+          (c): c is Extract<RawCandidate, { kind: 'charging' }> =>
+            c.kind === 'charging' &&
+            (c.row.status === 'QUEUED' || c.row.status === 'CHARGING'),
+        )
+        .map((c) => c.row.hubId),
+    ),
+  );
+
+  const [vehicles, chargingSet, projectionPairs] = await Promise.all([
     vehicleIds.length > 0
-      ? await Promise.all([
-          client.rentalVehicle.findMany({ where: { id: { in: vehicleIds } } }),
-          isVehicleCharging(client, vehicleIds),
-        ])
-      : [[], new Set<string>()];
+      ? client.rentalVehicle.findMany({ where: { id: { in: vehicleIds } } })
+      : Promise.resolve<PrismaRentalVehicle[]>([]),
+    vehicleIds.length > 0
+      ? isVehicleCharging(client, vehicleIds)
+      : Promise.resolve(new Set<string>()),
+    Promise.all(
+      chargingHubIds.map(async (hubId): Promise<[string, ScheduleProjection]> => {
+        const bundle = await buildHubProjection(client, hubId, now);
+        return [hubId, bundle.projection];
+      }),
+    ),
+  ]);
 
   const vehicleById = new Map<string, PrismaRentalVehicle>();
   for (const v of vehicles) {
     vehicleById.set(v.id, v);
   }
+  const projectionsByHub = new Map<string, ScheduleProjection>(projectionPairs);
 
   const items: HistoryItem[] = kept.map((entry) => {
     if (entry.kind === 'vehicle') {
@@ -142,10 +204,18 @@ export async function getHistory(
       };
     }
 
+    if (entry.kind === 'parking') {
+      return {
+        kind: 'parking',
+        at: entry.createdAt.toISOString(),
+        item: toParkingDto(entry.row, now),
+      };
+    }
+
     return {
-      kind: 'parking',
+      kind: 'charging',
       at: entry.createdAt.toISOString(),
-      item: toParkingDto(entry.row, now),
+      item: toRequestView(entry.row, projectionsByHub.get(entry.row.hubId) ?? null, now),
     };
   });
 
