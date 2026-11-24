@@ -403,6 +403,7 @@ model ParkingReservation {
   expiresAt      DateTime          @db.Timestamptz(3)
   bookingGroupId String?
   idempotencyKey String?
+  createdAt      DateTime          @default(now()) @db.Timestamptz(3)
 
   user         User         @relation(fields: [userId], references: [id])
   parkingSpace ParkingSpace @relation(fields: [parkingSpaceId], references: [id])
