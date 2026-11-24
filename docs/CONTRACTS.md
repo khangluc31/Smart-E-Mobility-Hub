@@ -192,7 +192,7 @@ Expiry and window end are handled by the `reservations.tick` job (no endpoint).
 
 | Method & path | Role | Request | 2xx response | Errors | FR |
 |---|---|---|---|---|---|
-| `GET /me/history` | S | query `type=all\|vehicle\|parking\|charging` (default all), `status?`, `limit`, `cursor` | `200 { items: HistoryItem[], nextCursor }` newest first | 400 | FR-10 |
+| `GET /me/history` | S | query `type=all\|vehicle\|parking\|charging` (default all), `status?` (a `ReservationStatus` or `ChargingRequestStatus`; applied only to the kinds that have it), `limit`, `cursor` | `200 { items: HistoryItem[], nextCursor }` newest first | 400 | FR-10 |
 
 ```ts
 type HistoryItem =

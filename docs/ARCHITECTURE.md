@@ -111,6 +111,7 @@ flowchart TD
   notifications --> core
   reservations --> hubs
   reservations --> notifications
+  reservations --> charging
   charging --> notifications
   privateEvs[private-evs] --> reservations
   privateEvs --> charging
@@ -133,6 +134,7 @@ Rules
 2. Every module may import `core/*` and `types/*`. `core` imports no module.
 3. `simulation/engine.ts` imports **no** Prisma, no `core/db.ts` (lint rule `no-restricted-imports`). It may import the pure files `charging/priority.ts` and `charging/schedule.ts`.
 4. If two modules need each other, move the shared part into the lower one or into a pure helper. Ask M1.
+5. Charging never imports reservations (D-23); it reads vehicle_reservation read-only for D-13.
 
 ---
 
@@ -153,7 +155,7 @@ export async function lockRow(tx: Tx, table: LockableTable, id: string): Promise
 ```
 
 - Every write that checks-then-changes state runs in `db.$transaction(async (tx) => …)`.
-- **Lock order** (prevents deadlocks): resource row first (`rental_vehicle` / `parking_space` / `charging_point`), then the booking row (`*_reservation` / `charging_request`). Jobs follow the same order.
+- **Lock order** (prevents deadlocks): vehicle rows (private_ev / rental_vehicle) → parking_space → charging_point → booking rows (vehicle_reservation / parking_reservation → charging_request). Jobs follow the same order.
 - Picking "any free resource" uses `FOR UPDATE SKIP LOCKED LIMIT 1` via `$queryRaw`, so two concurrent requests take different resources or the loser finds none (BR-10).
 - DB constraints (§5.2) are the last guard. `core/errors.ts` maps Postgres `23505` (Prisma `P2002`) and `23P01` (exclusion violation) to `409 RESOURCE_TAKEN` unless the caller maps them to something more specific.
 

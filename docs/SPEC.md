@@ -283,6 +283,7 @@ This is the canonical list. `ARCHITECTURE.md` §16 gives the trade-offs behind e
 | D-20 | Applying a simulation recommendation is two calls: `preview` (shows the exact live changes, returns a one-time confirm token) then `apply` with that token (FR-58, UC-33 E2). | Enforces the "secondary confirmation" in the API, not just in the UI. |
 | D-21 | Every state and vocabulary column is a **Prisma enum** (a Postgres enum type) with exactly the §4 / CONTRACTS §1 values. `types/enums.ts` mirrors them as plain TS unions (copied to the frontend), with a type-level check that they match the Prisma enums. | The database itself refuses a misspelled status, on top of `assertTransition()` (BR-05). |
 | D-22 | `assertTransition()` is pure and only throws. The **error handler** writes the security audit row for an invalid transition with the plain DB client, after the failed transaction has rolled back. Role denials (`requireRole`) are audited the same way. | An audit row written inside the failing transaction would be rolled back with it, so BR-05's "log the attempt" would silently never happen. |
+| D-23 | Reservations may call the charging service (charge on return D-13, cancel queued on reserve D-18, charging items in history); charging never imports reservations and reads vehicle_reservation read-only for the D-13 window. | Atomic return-with-charging and reserve-cancels-queue need one transaction across both modules; one direction keeps the import graph acyclic. |
 
 ## 9. Traceability
 
