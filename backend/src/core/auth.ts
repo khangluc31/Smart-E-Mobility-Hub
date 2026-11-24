@@ -47,7 +47,7 @@ export function requireRole(role: Role) {
       return;
     }
     if (user.role !== role) {
-      // D-22: audit the denial with plain db (no active transaction). Never block the 403.
+      // D-22: audit the denial with plain db before sending 403; failure is logged, still 403.
       void audit(db, {
         actorId: user.id,
         actorRole: user.role,
@@ -55,8 +55,11 @@ export function requireRole(role: Role) {
         entityType: 'auth',
         entityIds: [],
         details: { method: req.method, path: req.originalUrl || req.path, requiredRole: role },
-      }).catch((err) => console.error('[auth] failed to write SECURITY_DENIED audit', err));
-      next(forbidden());
+      })
+        .catch((err) => console.error('[auth] failed to write SECURITY_DENIED audit', err))
+        .finally(() => {
+          next(forbidden());
+        });
       return;
     }
     next();
