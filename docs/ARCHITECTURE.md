@@ -252,7 +252,7 @@ Prisma models use PascalCase and `@@map("snake_case")`; **fields are not `@map`p
 | Table | Key fields |
 |---|---|
 | `vehicle_reservation` (= rental record) | id, userId, rentalVehicleId, hubId (pick-up), status, createdAt, expiresAt, pickedUpAt?, returnedAt?, returnHubId?, startBatteryPct?, endBatteryPct?, endReason? (`RETURNED\|CANCELLED\|EXPIRED\|INCIDENT`), idempotencyKey? |
-| `parking_reservation` | id, userId, parkingSpaceId, hubId, vehicleClass, privateEvId?, windowStart, windowEnd, status, claimedAt?, expiresAt (= windowStart + hold), bookingGroupId?, idempotencyKey? |
+| `parking_reservation` | id, userId, parkingSpaceId, hubId, vehicleClass, privateEvId?, windowStart, windowEnd, status, claimedAt?, expiresAt (= min(windowStart + hold, windowEnd)), bookingGroupId?, idempotencyKey?, createdAt |
 | `charging_request` | id, requestedById, ownerId? (null for fleet dispatch), vehicleKind `RENTAL\|PRIVATE`, rentalVehicleId?, privateEvId?, vehicleClass, hubId, mode `QUEUE\|ADVANCE`, status, targetPct, startPct, currentPct, desiredTime, neededBy? (upcoming usage, BR-06), chargingPointId?, slotStart?, slotEnd?, startedAt?, endedAt?, endReason? (`TARGET_REACHED\|USER_STOP\|POINT_FAILURE\|VEHICLE_FAULT`), finalPct?, manualAdjust (default 0), bookingGroupId?, createdAt |
 | `idempotency_key` | key + userId (PK), endpoint, responseStatus, responseBody Json, createdAt — NFR-08 |
 
