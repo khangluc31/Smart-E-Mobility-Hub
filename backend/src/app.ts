@@ -5,7 +5,7 @@ import { db } from './core/db';
 import { requireAuth, requireRole } from './core/auth';
 import { errorHandler, notFoundHandler } from './core/errorHandler';
 import { authRouter } from './modules/auth/auth.routes';
-import { chargingOpsRouter } from './modules/charging/charging.routes';
+import { chargingOpsRouter, chargingRouter } from './modules/charging/charging.routes';
 import { hubsRouter } from './modules/hubs/hubs.routes';
 import { notificationsRouter } from './modules/notifications/notifications.routes';
 import { privateEvsRouter } from './modules/private-evs/privateEvs.routes';
@@ -83,6 +83,7 @@ export function createApp(opts?: { corsOrigins?: readonly string[] }) {
     parkingReservationsRouter,
   );
   api.use('/private-evs', requireAuth, requireRole('STUDENT'), privateEvsRouter);
+  api.use('/charging', requireAuth, requireRole('STUDENT'), chargingRouter);
   api.use('/me', requireAuth, requireRole('STUDENT'), meRouter);
 
   app.use('/api/ops', requireAuth, requireRole('OPERATOR'), ops);

@@ -7,6 +7,7 @@ import { Prisma } from '@prisma/client';
 import { db, lockRow, type DbClient } from '../core/db';
 import { AppError, badRequest, conflict } from '../core/errors';
 import { events } from '../core/events';
+import { endSession } from '../modules/charging/chargingRequests.service';
 import type { IncidentResourceType } from '../types/enums';
 import { parsePacket } from './telemetry.validate';
 
@@ -72,12 +73,21 @@ export async function recordReject(
   });
 }
 
-// Post-commit side effects (ARCHITECTURE §4.6, §7.3, Rule 4).
-export function afterCommit(result: IngestResult): void {
+// Post-commit side effects (ARCHITECTURE §4.6, §7.3 step 4).
+export async function afterCommit(result: IngestResult): Promise<void> {
   events.emit('TELEMETRY_INGESTED', { hubId: result.hubId });
 
   // TODO(M6, incidents ticket): incidents.service.create({ source: 'TELEMETRY', ... }) for each fault (FR-36)
-  // TODO(M6, charging ticket): charging.service.endSession(id, 'TARGET_REACHED') for each targetsReached (FR-23)
+
+  const appliedAt = new Date(result.appliedAt);
+  const now = Number.isNaN(appliedAt.getTime()) ? new Date() : appliedAt;
+  for (const id of result.targetsReached) {
+    try {
+      await endSession(id, 'TARGET_REACHED', now);
+    } catch (err) {
+      console.error(`[telemetry.afterCommit] failed to end charging session ${id}`, err);
+    }
+  }
 }
 
 export async function ingest(
@@ -398,6 +408,6 @@ export async function ingest(
     throw err;
   }
 
-  afterCommit(result);
+  await afterCommit(result);
   return result;
 }
