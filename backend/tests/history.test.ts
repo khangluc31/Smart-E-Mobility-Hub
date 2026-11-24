@@ -26,6 +26,7 @@ function compareDesc(
 async function clearReservations(): Promise<void> {
   await db.vehicleReservation.deleteMany();
   await db.parkingReservation.deleteMany();
+  await db.chargingRequest.deleteMany({ where: { ownerId: { not: null } } });
 }
 
 describe('T-15 GET /api/me/history', () => {

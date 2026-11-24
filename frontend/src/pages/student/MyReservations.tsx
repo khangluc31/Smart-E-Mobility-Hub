@@ -23,6 +23,7 @@ import { ErrorBox } from '@/components/common/ErrorBox';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -96,6 +97,8 @@ export function MyReservations() {
   const [changeOpen, setChangeOpen] = useState(false);
   const [returnOpen, setReturnOpen] = useState(false);
   const [returnHubId, setReturnHubId] = useState<string>('');
+  const [wantCharging, setWantCharging] = useState(false);
+  const [chargeTargetPct, setChargeTargetPct] = useState<string>('100');
 
   // Rentable vehicles at same Hub for Change vehicle dialog (FR-09)
   const {
@@ -114,7 +117,7 @@ export function MyReservations() {
   );
 
   // History tabs & infinite query (FR-10)
-  const [historyTab, setHistoryTab] = useState<'all' | 'vehicle' | 'parking'>('all');
+  const [historyTab, setHistoryTab] = useState<HistoryType>('all');
   const {
     data: historyPages,
     isLoading: isLoadingHistory,
@@ -122,7 +125,7 @@ export function MyReservations() {
     hasNextPage,
     isFetchingNextPage,
     fetchNextPage,
-  } = useHistory({ type: historyTab as HistoryType });
+  } = useHistory({ type: historyTab });
 
   const historyItems = useMemo(
     () => historyPages?.pages.flatMap((p) => p.items) ?? [],
@@ -163,13 +166,21 @@ export function MyReservations() {
     if (!current) return;
     returnMutation.reset();
     setReturnHubId(current.hubId);
+    setWantCharging(false);
+    setChargeTargetPct('100');
     setReturnOpen(true);
   }
 
   async function handleConfirmReturn() {
     if (!current || !returnHubId) return;
     try {
-      await returnMutation.mutateAsync({ id: current.id, hubId: returnHubId });
+      await returnMutation.mutateAsync({
+        id: current.id,
+        hubId: returnHubId,
+        ...(wantCharging
+          ? { requestCharging: { targetPct: Number(chargeTargetPct) } }
+          : {}),
+      });
       setReturnOpen(false);
     } catch {
       // Displayed via ErrorBox
@@ -332,11 +343,8 @@ export function MyReservations() {
             <span>History</span>
           </h2>
 
-          <Tabs
-            value={historyTab}
-            onValueChange={(val) => setHistoryTab(val as 'all' | 'vehicle' | 'parking')}
-          >
-            <TabsList>
+          <Tabs value={historyTab} onValueChange={(val) => setHistoryTab(val as HistoryType)}>
+            <TabsList className="flex-wrap h-auto">
               <TabsTrigger value="all" className="min-h-8">
                 All
               </TabsTrigger>
@@ -345,6 +353,9 @@ export function MyReservations() {
               </TabsTrigger>
               <TabsTrigger value="parking" className="min-h-8">
                 Parking
+              </TabsTrigger>
+              <TabsTrigger value="charging" className="min-h-8">
+                Charging
               </TabsTrigger>
             </TabsList>
           </Tabs>
@@ -406,26 +417,68 @@ export function MyReservations() {
                 );
               }
 
-              const p = entry.item;
+              if (entry.kind === 'parking') {
+                const p = entry.item;
+                return (
+                  <Card key={`p-${p.id}`}>
+                    <CardContent className="py-3 px-4 space-y-1.5 text-xs">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Badge variant="secondary">Parking</Badge>
+                          <span className="font-mono font-semibold">{p.parkingSpaceId}</span>
+                          <span className="text-muted-foreground">{CLASS_LABEL[p.vehicleClass]}</span>
+                        </div>
+                        <StatusBadge kind="reservation" value={p.status} />
+                      </div>
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-muted-foreground">
+                        <span>Hub: {hubNamesById.get(p.hubId) ?? p.hubId}</span>
+                        <span>Created {formatLocalDateTime(entry.at)}</span>
+                      </div>
+                      <div className="text-muted-foreground">
+                        Window: {formatLocalDateTime(p.windowStart)} –{' '}
+                        {formatLocalDateTime(p.windowEnd)}
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              }
+
+              const c = entry.item;
+              const vehicleLabel = c.rentalVehicleId ?? c.privateEvId ?? c.id;
               return (
-                <Card key={`p-${p.id}`}>
+                <Card key={`c-${c.id}`}>
                   <CardContent className="py-3 px-4 space-y-1.5 text-xs">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex flex-wrap items-center gap-2">
-                        <Badge variant="secondary">Parking</Badge>
-                        <span className="font-mono font-semibold">{p.parkingSpaceId}</span>
-                        <span className="text-muted-foreground">{CLASS_LABEL[p.vehicleClass]}</span>
+                        <Badge variant="secondary">Charging</Badge>
+                        <span className="font-mono font-semibold">{vehicleLabel}</span>
+                        <span className="text-muted-foreground">{CLASS_LABEL[c.vehicleClass]}</span>
                       </div>
-                      <StatusBadge kind="reservation" value={p.status} />
+                      <StatusBadge kind="chargingRequest" value={c.status} />
                     </div>
                     <div className="flex flex-wrap items-center justify-between gap-2 text-muted-foreground">
-                      <span>Hub: {hubNamesById.get(p.hubId) ?? p.hubId}</span>
+                      <span>Hub: {hubNamesById.get(c.hubId) ?? c.hubId}</span>
                       <span>Created {formatLocalDateTime(entry.at)}</span>
                     </div>
-                    <div className="text-muted-foreground">
-                      Window: {formatLocalDateTime(p.windowStart)} –{' '}
-                      {formatLocalDateTime(p.windowEnd)}
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-muted-foreground">
+                      <span>Target: {c.targetPct}%</span>
+                      <span>
+                        {c.finalPct !== null
+                          ? `Final: ${c.finalPct}%`
+                          : `Battery: ${c.currentPct}%`}
+                      </span>
+                      {c.queuePosition !== null && <span>Queue #{c.queuePosition}</span>}
                     </div>
+                    {(c.estimatedStart || c.estimatedEnd) && (
+                      <div className="flex flex-wrap gap-x-4 gap-y-1 text-muted-foreground">
+                        {c.estimatedStart && (
+                          <span>Est. start: {formatLocalDateTime(c.estimatedStart)}</span>
+                        )}
+                        {c.estimatedEnd && (
+                          <span>Est. end: {formatLocalDateTime(c.estimatedEnd)}</span>
+                        )}
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               );
@@ -580,6 +633,37 @@ export function MyReservations() {
                   ))}
                 </SelectContent>
               </Select>
+            </div>
+
+            <div className="space-y-2 rounded-md border p-3">
+              <label
+                htmlFor="return-request-charging"
+                className="flex items-center gap-2 text-sm font-medium cursor-pointer"
+              >
+                <input
+                  id="return-request-charging"
+                  type="checkbox"
+                  checked={wantCharging}
+                  onChange={(e) => setWantCharging(e.target.checked)}
+                  className="h-4 w-4 rounded border-input"
+                />
+                <span>Request charging after return</span>
+              </label>
+
+              {wantCharging && (
+                <div className="space-y-1.5 pt-1">
+                  <Label htmlFor="return-target-pct">Target battery (%)</Label>
+                  <Input
+                    id="return-target-pct"
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={chargeTargetPct}
+                    onChange={(e) => setChargeTargetPct(e.target.value)}
+                    className="min-h-9"
+                  />
+                </div>
+              )}
             </div>
 
             {Boolean(returnMutation.error) && (

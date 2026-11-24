@@ -13,8 +13,8 @@ import {
 } from '../../core/errors';
 import { parseIdempotencyKey } from '../../core/idempotency';
 import { parseListQuery } from '../../core/pagination';
-import { RENTAL_VEHICLE_TYPES, RESERVATION_STATUSES, VEHICLE_CLASSES } from '../../types/enums';
-import { HISTORY_TYPES } from '../../types/reservations';
+import { RENTAL_VEHICLE_TYPES, VEHICLE_CLASSES } from '../../types/enums';
+import { HISTORY_STATUSES, HISTORY_TYPES } from '../../types/reservations';
 import { getHistory } from './history.service';
 import { recommend, searchVehicles } from './vehicles.service';
 import {
@@ -24,6 +24,7 @@ import {
   pickUp,
   reserveVehicle,
   returnVehicle,
+  type ReturnRequestChargingInput,
 } from './vehicleReservations.service';
 import {
   cancelParking,
@@ -144,17 +145,72 @@ vehicleReservationsRouter.post(
   }),
 );
 
-// POST /api/vehicle-reservations/:id/return (FR-12, FR-19)
+function parseReturnRequestCharging(
+  raw: unknown,
+  now: Date,
+): ReturnRequestChargingInput | undefined {
+  if (raw === undefined || raw === null) {
+    return undefined;
+  }
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    throw badRequest('requestCharging must be a JSON object.', 'requestCharging', [
+      'Provide requestCharging as an object with targetPct (and optional neededBy), or omit it.',
+    ]);
+  }
+  const obj = raw as Record<string, unknown>;
+  const targetRaw = obj['targetPct'];
+  if (targetRaw === undefined || targetRaw === null) {
+    throw badRequest('requestCharging.targetPct is required.', 'requestCharging.targetPct');
+  }
+  if (typeof targetRaw !== 'number' || !Number.isFinite(targetRaw)) {
+    throw badRequest('requestCharging.targetPct must be a number.', 'requestCharging.targetPct');
+  }
+  if (targetRaw <= 0 || targetRaw > 100) {
+    throw badRequest(
+      'requestCharging.targetPct must be greater than 0 and at most 100.',
+      'requestCharging.targetPct',
+    );
+  }
+
+  let neededBy: Date | undefined;
+  if (obj['neededBy'] !== undefined && obj['neededBy'] !== null) {
+    try {
+      neededBy = requireIsoDate(obj, 'neededBy');
+    } catch {
+      throw badRequest(
+        'requestCharging.neededBy must be a valid ISO-8601 date.',
+        'requestCharging.neededBy',
+      );
+    }
+    if (neededBy.getTime() <= now.getTime()) {
+      throw badRequest(
+        'requestCharging.neededBy must be in the future.',
+        'requestCharging.neededBy',
+      );
+    }
+  }
+
+  return { targetPct: targetRaw, neededBy };
+}
+
+// POST /api/vehicle-reservations/:id/return (FR-12, FR-19, D-13)
 vehicleReservationsRouter.post(
   '/:id/return',
   wrap(async (req, res) => {
     const body = asObject(req.body);
     const hubId = requireString(body, 'hubId', { trim: true, min: 1 });
+    const now = new Date();
+    const requestCharging = parseReturnRequestCharging(body['requestCharging'], now);
 
-    const result = await returnVehicle(req.user!.id, req.params.id as string, {
-      hubId,
-      requestCharging: body['requestCharging'],
-    });
+    const result = await returnVehicle(
+      req.user!.id,
+      req.params.id as string,
+      {
+        hubId,
+        requestCharging,
+      },
+      now,
+    );
     res.status(200).json(result);
   }),
 );
@@ -258,7 +314,7 @@ meRouter.get(
   wrap(async (req, res) => {
     const q = req.query as Record<string, unknown>;
     const type = optional(requireEnum)(q, 'type', HISTORY_TYPES) ?? 'all';
-    const status = optional(requireEnum)(q, 'status', RESERVATION_STATUSES);
+    const status = optional(requireEnum)(q, 'status', HISTORY_STATUSES);
     const { limit, cursor } = parseListQuery(q);
 
     const page = await getHistory(req.user!.id, {
