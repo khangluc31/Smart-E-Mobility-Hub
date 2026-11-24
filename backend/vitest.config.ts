@@ -21,6 +21,7 @@ export default defineConfig({
       thresholds: {
         'src/core/**': { lines: 70 },
         'src/modules/auth/**': { lines: 70 },
+        'src/modules/charging/**': { lines: 70 },
         'src/modules/hubs/**': { lines: 70 },
         'src/modules/notifications/**': { lines: 70 },
         'src/modules/private-evs/**': { lines: 70 },

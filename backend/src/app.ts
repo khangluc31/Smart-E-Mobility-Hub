@@ -5,6 +5,7 @@ import { db } from './core/db';
 import { requireAuth, requireRole } from './core/auth';
 import { errorHandler, notFoundHandler } from './core/errorHandler';
 import { authRouter } from './modules/auth/auth.routes';
+import { chargingOpsRouter } from './modules/charging/charging.routes';
 import { hubsRouter } from './modules/hubs/hubs.routes';
 import { notificationsRouter } from './modules/notifications/notifications.routes';
 import { privateEvsRouter } from './modules/private-evs/privateEvs.routes';
@@ -63,6 +64,7 @@ export function createApp(opts?: { corsOrigins?: readonly string[] }) {
   app.use('/api/telemetry', telemetryRouter);
 
   ops.use('/telemetry', telemetryOpsRouter);
+  ops.use('/charging', chargingOpsRouter);
   api.use('/auth', authRouter);
   api.use('/hubs', requireAuth, hubsRouter);
   api.use('/notifications', requireAuth, notificationsRouter);
