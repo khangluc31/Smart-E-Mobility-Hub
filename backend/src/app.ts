@@ -9,6 +9,7 @@ import { hubsRouter } from './modules/hubs/hubs.routes';
 import { notificationsRouter } from './modules/notifications/notifications.routes';
 import { privateEvsRouter } from './modules/private-evs/privateEvs.routes';
 import {
+  meRouter,
   parkingReservationsRouter,
   parkingRouter,
   vehicleReservationsRouter,
@@ -80,6 +81,7 @@ export function createApp(opts?: { corsOrigins?: readonly string[] }) {
     parkingReservationsRouter,
   );
   api.use('/private-evs', requireAuth, requireRole('STUDENT'), privateEvsRouter);
+  api.use('/me', requireAuth, requireRole('STUDENT'), meRouter);
 
   app.use('/api/ops', requireAuth, requireRole('OPERATOR'), ops);
   app.use('/api', api);

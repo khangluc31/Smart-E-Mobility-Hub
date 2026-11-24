@@ -12,7 +12,10 @@ import {
   requireString,
 } from '../../core/errors';
 import { parseIdempotencyKey } from '../../core/idempotency';
-import { RENTAL_VEHICLE_TYPES, VEHICLE_CLASSES } from '../../types/enums';
+import { parseListQuery } from '../../core/pagination';
+import { RENTAL_VEHICLE_TYPES, RESERVATION_STATUSES, VEHICLE_CLASSES } from '../../types/enums';
+import { HISTORY_TYPES } from '../../types/reservations';
+import { getHistory } from './history.service';
 import { recommend, searchVehicles } from './vehicles.service';
 import {
   cancelReservation,
@@ -240,5 +243,30 @@ parkingReservationsRouter.post(
   wrap(async (req, res) => {
     const completed = await leaveParking(req.user!.id, req.params.id as string);
     res.status(200).json(completed);
+  }),
+);
+
+// ---------------------------------------------------------------------------
+// User history (CONTRACTS §6, FR-10, UC-07 E1)
+// ---------------------------------------------------------------------------
+
+export const meRouter = Router();
+
+// GET /api/me/history — always scoped to req.user.id; any userId query param is ignored
+meRouter.get(
+  '/history',
+  wrap(async (req, res) => {
+    const q = req.query as Record<string, unknown>;
+    const type = optional(requireEnum)(q, 'type', HISTORY_TYPES) ?? 'all';
+    const status = optional(requireEnum)(q, 'status', RESERVATION_STATUSES);
+    const { limit, cursor } = parseListQuery(q);
+
+    const page = await getHistory(req.user!.id, {
+      type,
+      status,
+      limit,
+      cursor,
+    });
+    res.status(200).json(page);
   }),
 );
