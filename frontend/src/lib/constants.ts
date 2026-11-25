@@ -33,5 +33,9 @@ export const DEMO_STALL_MAX_SEC = 600;
 // CONTRACTS §8.2: default target battery percentage for fleet charging dispatch.
 export const FULL_CHARGE_PCT = 100;
 
+// SPEC §3 / BR-08: destination FLEET occupancy limit (%) above which redistribution requires override + reason.
+export const REDISTRIBUTION_DEST_LIMIT_PCT = 85;
+
+
 
 

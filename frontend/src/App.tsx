@@ -22,6 +22,7 @@ import { Dashboard } from '@/pages/operator/Dashboard';
 import { Alerts } from '@/pages/operator/Alerts';
 import { Incidents } from '@/pages/operator/Incidents';
 import { ChargingQueue } from '@/pages/operator/ChargingQueue';
+import { Redistribution } from '@/pages/operator/Redistribution';
 import { DemoControls } from '@/pages/operator/DemoControls';
 import { Skeleton } from '@/components/ui/skeleton';
 
@@ -70,16 +71,7 @@ export function App() {
             <Route path="alerts" element={<Alerts />} />
             <Route path="incidents" element={<Incidents />} />
             <Route path="charging" element={<ChargingQueue />} />
-            <Route
-              path="redistribution"
-              element={
-                <TodoPage
-                  title="Vehicle Redistribution"
-                  area="imbalance detection & redistribution tasks"
-                  owner="M2"
-                />
-              }
-            />
+            <Route path="redistribution" element={<Redistribution />} />
             <Route
               path="simulation"
               element={
