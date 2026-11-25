@@ -1,7 +1,7 @@
-// Desktop-first sidebar layout for Operator screens (ARCHITECTURE §13, FR-61).
+// Desktop-first sidebar layout for Operator screens (ARCHITECTURE §13, FR-61, D-24).
 
 import { Link, NavLink, Outlet } from 'react-router-dom';
-import { KeyRound, LogOut, MapPin } from 'lucide-react';
+import { Activity, FlaskConical, KeyRound, LogOut, MapPin } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useHealth } from '@/hooks/useHealth';
 import { NotificationBell } from '@/components/common/NotificationBell';
@@ -15,7 +15,6 @@ const OPS_NAV_ITEMS = [
   { to: '/ops/incidents', label: 'Incidents', end: false },
   { to: '/ops/charging', label: 'Charging queue', end: false },
   { to: '/ops/redistribution', label: 'Redistribution', end: false },
-  { to: '/ops/simulation', label: 'Simulation', end: false },
   { to: '/ops/demo', label: 'Demo controls', end: false },
 ] as const;
 
@@ -40,6 +39,28 @@ export function OperatorLayout() {
               )}
             </div>
             <NotificationBell />
+          </div>
+
+          <div
+            role="navigation"
+            aria-label="Workspace switch"
+            className="grid grid-cols-2 gap-1 rounded-md border bg-muted/50 p-1"
+          >
+            <Link
+              to="/ops"
+              aria-current="page"
+              className="inline-flex items-center justify-center gap-1.5 rounded px-2 py-1.5 text-xs font-medium bg-primary text-primary-foreground shadow-xs"
+            >
+              <Activity className="h-3.5 w-3.5 shrink-0" />
+              <span>Operations</span>
+            </Link>
+            <Link
+              to="/sim"
+              className="inline-flex items-center justify-center gap-1.5 rounded px-2 py-1.5 text-xs font-medium text-muted-foreground hover:bg-background hover:text-foreground transition-colors"
+            >
+              <FlaskConical className="h-3.5 w-3.5 shrink-0" />
+              <span>Simulation</span>
+            </Link>
           </div>
 
           <nav aria-label="Operator navigation" className="flex flex-wrap md:flex-col gap-1">
