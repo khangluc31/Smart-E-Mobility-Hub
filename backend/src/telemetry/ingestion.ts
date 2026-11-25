@@ -8,6 +8,7 @@ import { db, lockRow, type DbClient } from '../core/db';
 import { AppError, badRequest, conflict } from '../core/errors';
 import { events } from '../core/events';
 import { endSession } from '../modules/charging/chargingRequests.service';
+import * as incidentsService from '../modules/incidents/incidents.service';
 import type { IncidentResourceType } from '../types/enums';
 import { parsePacket } from './telemetry.validate';
 
@@ -77,10 +78,30 @@ export async function recordReject(
 export async function afterCommit(result: IngestResult): Promise<void> {
   events.emit('TELEMETRY_INGESTED', { hubId: result.hubId });
 
-  // TODO(M6, incidents ticket): incidents.service.create({ source: 'TELEMETRY', ... }) for each fault (FR-36)
-
   const appliedAt = new Date(result.appliedAt);
   const now = Number.isNaN(appliedAt.getTime()) ? new Date() : appliedAt;
+
+  for (const fault of result.faults) {
+    try {
+      await incidentsService.reportIncident(
+        {
+          source: 'TELEMETRY',
+          resourceType: fault.resourceType,
+          resourceId: fault.resourceId,
+          hubId: result.hubId,
+          category: incidentsService.categoryForFault(fault.resourceType, fault.faultCode),
+          notes: `Telemetry fault code: ${fault.faultCode}`,
+        },
+        now,
+      );
+    } catch (err) {
+      console.error(
+        `[telemetry.afterCommit] failed to report incident for ${fault.resourceType} ${fault.resourceId}`,
+        err,
+      );
+    }
+  }
+
   for (const id of result.targetsReached) {
     try {
       await endSession(id, 'TARGET_REACHED', now);
