@@ -1,16 +1,20 @@
-// Private EV routes (CONTRACTS §7, FR-25..FR-27).
+// Private EV routes (CONTRACTS §7, FR-25..FR-28).
 // Validates input, calls the service, sends the response. No Prisma in routes (AGENTS.md §4).
 
 import { Router, type Request, type Response, type NextFunction } from 'express';
 import {
   badRequest,
+  optional,
   requireEnum,
+  requireIsoDate,
   requireNumber,
   requireString,
 } from '../../core/errors';
+import { parseIdempotencyKey } from '../../core/idempotency';
 import { PRIVATE_EV_TYPES, type PrivateEvType } from '../../types/enums';
 import { PRIVATE_EV_LABEL_MAX, PRIVATE_EV_LABEL_MIN } from './privateEvs.rules';
 import {
+  bookParkingAndCharging,
   createPrivateEv,
   listPrivateEvs,
   removePrivateEv,
@@ -130,5 +134,30 @@ privateEvsRouter.delete(
   wrap(async (req, res) => {
     await removePrivateEv(req.user!.id, req.params.id as string);
     res.status(204).send();
+  }),
+);
+
+// POST /api/private-evs/:id/book-parking-charging (FR-28, BR-14, NFR-08)
+privateEvsRouter.post(
+  '/:id/book-parking-charging',
+  wrap(async (req, res) => {
+    const body = asObject(req.body);
+    const hubId = requireString(body, 'hubId', { trim: true, min: 1 });
+    const windowStart = requireIsoDate(body, 'windowStart');
+    const windowEnd = requireIsoDate(body, 'windowEnd');
+    const targetPct = requireNumber(body, 'targetPct', { max: 100 });
+    if (targetPct <= 0) {
+      throw badRequest('targetPct must be greater than 0 and at most 100.', 'targetPct');
+    }
+    const chargeStart = optional(requireIsoDate)(body, 'chargeStart');
+    const idemKey = parseIdempotencyKey(req.headers['idempotency-key']);
+
+    const result = await bookParkingAndCharging(
+      req.user!,
+      req.params.id as string,
+      { hubId, windowStart, windowEnd, targetPct, chargeStart },
+      { idemKey },
+    );
+    res.status(201).json(result);
   }),
 );
