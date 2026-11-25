@@ -18,6 +18,7 @@ import { isDegraded } from '../hubs/hubs.metrics';
 import { alternativeHubs } from '../hubs/hubs.service';
 import type { Alternative } from '../../types/common';
 import type { VehicleClass } from '../../types/enums';
+import type { IncidentImpact } from '../../types/incidents';
 import type { ParkingAvailability, ParkingReservation } from '../../types/reservations';
 
 // CONTRACTS §5: start ≥ now − 1 min (clock skew)
@@ -962,4 +963,198 @@ export async function parkingTick(now: Date = new Date()): Promise<{
   }
 
   return { completed, expired, reserved };
+}
+
+export interface RecoverParkingSpaceInput {
+  id: string;
+  hubId: string;
+  vehicleClass: VehicleClass;
+}
+
+/**
+ * FR-39, FR-40, BR-07, BR-13 (T-22 Rule 4): Recover CONFIRMED and ACTIVE parking reservations
+ * with `windowEnd > now` on a withdrawn UNAVAILABLE space inside the caller's incident transaction
+ * (withdrawn space is already locked). Reservations with `windowEnd <= now` are untouched; a
+ * rental vehicle parked in a withdrawn FLEET space stays linked (T-12 pick-up unlinks it).
+ */
+export async function recoverParkingBookings(
+  tx: Tx,
+  space: RecoverParkingSpaceInput,
+  now: Date = new Date(),
+): Promise<IncidentImpact[]> {
+  const candidates = await tx.parkingReservation.findMany({
+    where: {
+      parkingSpaceId: space.id,
+      status: { in: ['CONFIRMED', 'ACTIVE'] },
+      windowEnd: { gt: now },
+    },
+    orderBy: [{ windowStart: 'asc' }, { id: 'asc' }],
+    select: { id: true },
+  });
+
+  const impacts: IncidentImpact[] = [];
+
+  for (const candidate of candidates) {
+    // Lock order: withdrawn parking_space [already locked] -> parking_reservation.
+    // Replacement spaces are picked via FOR UPDATE SKIP LOCKED (never waits, cannot deadlock).
+    await lockRow(tx, 'parking_reservation', candidate.id);
+
+    const res = await tx.parkingReservation.findUnique({ where: { id: candidate.id } });
+    if (
+      !res ||
+      res.parkingSpaceId !== space.id ||
+      (res.status !== 'CONFIRMED' && res.status !== 'ACTIVE') ||
+      res.windowEnd.getTime() <= now.getTime()
+    ) {
+      continue;
+    }
+
+    const windowStarted = res.windowStart.getTime() <= now.getTime();
+    const needsLiveFreeSpace = res.status === 'ACTIVE' || windowStarted;
+
+    // BR-10, BR-13, D-16: pick a replacement PUBLIC space of the same class at the same Hub.
+    // SKIP LOCKED never waits, so taking a replacement resource after locking bookings cannot deadlock.
+    const freeSpaces = needsLiveFreeSpace
+      ? await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT ps.id
+          FROM parking_space ps
+          WHERE ps."hubId" = ${space.hubId}
+            AND ps.id != ${space.id}
+            AND ps.pool = 'PUBLIC'::"ParkingPool"
+            AND ps."vehicleClass" = ${res.vehicleClass}::"VehicleClass"
+            AND ps.status = 'FREE'::"ParkingSpaceStatus"
+            AND NOT EXISTS (
+              SELECT 1
+              FROM parking_reservation pr
+              WHERE pr."parkingSpaceId" = ps.id
+                AND pr.status IN ('CONFIRMED', 'ACTIVE')
+                AND pr."windowStart" < ${res.windowEnd}
+                AND pr."windowEnd" > ${res.windowStart}
+            )
+          ORDER BY ps.id
+          LIMIT 1
+          FOR UPDATE OF ps SKIP LOCKED
+        `
+      : await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT ps.id
+          FROM parking_space ps
+          WHERE ps."hubId" = ${space.hubId}
+            AND ps.id != ${space.id}
+            AND ps.pool = 'PUBLIC'::"ParkingPool"
+            AND ps."vehicleClass" = ${res.vehicleClass}::"VehicleClass"
+            AND ps.status != 'UNAVAILABLE'::"ParkingSpaceStatus"
+            AND NOT EXISTS (
+              SELECT 1
+              FROM parking_reservation pr
+              WHERE pr."parkingSpaceId" = ps.id
+                AND pr.status IN ('CONFIRMED', 'ACTIVE')
+                AND pr."windowStart" < ${res.windowEnd}
+                AND pr."windowEnd" > ${res.windowStart}
+            )
+          ORDER BY ps.id
+          LIMIT 1
+          FOR UPDATE OF ps SKIP LOCKED
+        `;
+
+    const replacementSpaceId = freeSpaces[0]?.id ?? null;
+
+    if (replacementSpaceId) {
+      await tx.parkingReservation.update({
+        where: { id: res.id },
+        data: { parkingSpaceId: replacementSpaceId },
+      });
+
+      if (res.status === 'ACTIVE') {
+        assertTransition('parkingSpace', 'FREE', 'OCCUPIED');
+        await tx.parkingSpace.update({
+          where: { id: replacementSpaceId },
+          data: { status: 'OCCUPIED' },
+        });
+      } else if (windowStarted) {
+        assertTransition('parkingSpace', 'FREE', 'RESERVED');
+        await tx.parkingSpace.update({
+          where: { id: replacementSpaceId },
+          data: { status: 'RESERVED' },
+        });
+      }
+
+      await notify(tx, {
+        userId: res.userId,
+        type: 'RESERVATION_REASSIGNED',
+        title: 'Parking reservation reassigned',
+        body: `Your parking reservation at Hub ${res.hubId} was moved from space ${space.id} to ${replacementSpaceId}.`,
+        data: {
+          parkingReservationId: res.id,
+          oldParkingSpaceId: space.id,
+          newParkingSpaceId: replacementSpaceId,
+          hubId: res.hubId,
+        },
+      });
+
+      impacts.push({
+        bookingType: 'PARKING_RESERVATION',
+        bookingId: res.id,
+        userId: res.userId,
+        outcome: 'REASSIGNED',
+        newResourceId: replacementSpaceId,
+      });
+    } else if (res.status === 'CONFIRMED') {
+      assertTransition('reservation', res.status, 'CANCELLED');
+      await tx.parkingReservation.update({
+        where: { id: res.id },
+        data: { status: 'CANCELLED' },
+      });
+
+      await notify(tx, {
+        userId: res.userId,
+        type: 'RESERVATION_CANCELLED',
+        title: 'Parking reservation cancelled',
+        body: `Your parking reservation for space ${space.id} at Hub ${res.hubId} was cancelled because the space became unavailable.`,
+        data: {
+          parkingReservationId: res.id,
+          parkingSpaceId: space.id,
+          hubId: res.hubId,
+          reason: 'INCIDENT',
+        },
+      });
+
+      impacts.push({
+        bookingType: 'PARKING_RESERVATION',
+        bookingId: res.id,
+        userId: res.userId,
+        outcome: 'CANCELLED',
+        newResourceId: null,
+      });
+    } else {
+      // ACTIVE -> CANCELLED is not an allowed state transition (SPEC §4); end the stay as COMPLETED.
+      assertTransition('reservation', res.status, 'COMPLETED');
+      await tx.parkingReservation.update({
+        where: { id: res.id },
+        data: { status: 'COMPLETED' },
+      });
+
+      await notify(tx, {
+        userId: res.userId,
+        type: 'RESERVATION_CANCELLED',
+        title: 'Parking stay ended due to incident',
+        body: `Your active parking reservation for space ${space.id} at Hub ${res.hubId} was ended because the space became unavailable and no replacement was free.`,
+        data: {
+          parkingReservationId: res.id,
+          parkingSpaceId: space.id,
+          hubId: res.hubId,
+          reason: 'INCIDENT',
+        },
+      });
+
+      impacts.push({
+        bookingType: 'PARKING_RESERVATION',
+        bookingId: res.id,
+        userId: res.userId,
+        outcome: 'ENDED',
+        newResourceId: null,
+      });
+    }
+  }
+
+  return impacts;
 }

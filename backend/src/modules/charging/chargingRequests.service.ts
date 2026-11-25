@@ -18,6 +18,7 @@ import type {
   Role,
   VehicleClass,
 } from '../../types/enums';
+import type { IncidentImpact } from '../../types/incidents';
 import { buildHubProjection, toRequestView } from './charging.service';
 import type { ScheduleProjection } from './schedule';
 
@@ -55,6 +56,7 @@ export interface CreateQueueRequestInput {
   currentPct: number;
   desiredTime?: Date;
   neededBy?: Date | null;
+  manualAdjust?: number;
 }
 
 interface PrivateEvLockRow {
@@ -100,6 +102,7 @@ export async function createQueueRequest(
         currentPct: input.currentPct,
         desiredTime: input.desiredTime ?? now,
         neededBy: input.neededBy ?? null,
+        ...(input.manualAdjust !== undefined ? { manualAdjust: input.manualAdjust } : {}),
         createdAt: now,
       },
     });
@@ -394,13 +397,20 @@ export async function cancelRequest(
   return toRequestView(updated, null, now);
 }
 
-export async function endSession(
+export interface EndSessionOptions {
+  strict?: boolean;
+  skipNotify?: boolean;
+  lockedResource?: 'rental_vehicle' | 'charging_point';
+}
+
+export async function endSessionInTx(
+  tx: Tx,
   requestId: string,
   reason: ChargingEndReason,
   now: Date = new Date(),
-  opts: { strict?: boolean } = {},
+  opts: EndSessionOptions = {},
 ): Promise<ChargingRequest | null> {
-  const meta = await db.chargingRequest.findUnique({
+  const meta = await tx.chargingRequest.findUnique({
     where: { id: requestId },
     select: {
       id: true,
@@ -414,110 +424,127 @@ export async function endSession(
     return null;
   }
 
-  const ended = await db.$transaction(async (tx) => {
-    // Rule 9 lock order: vehicle -> charging_point -> charging_request.
-    if (meta.rentalVehicleId) {
-      await lockRow(tx, 'rental_vehicle', meta.rentalVehicleId);
-    } else if (meta.privateEvId) {
-      await lockRow(tx, 'private_ev', meta.privateEvId);
+  // Lock order: vehicle -> charging_point -> charging_request.
+  // When invoked from incident recovery on a charging_point, the point is already locked first
+  // so we lock only charging_request to avoid inverting charging_point -> vehicle.
+  if (opts.lockedResource !== 'charging_point') {
+    if (opts.lockedResource !== 'rental_vehicle') {
+      if (meta.rentalVehicleId) {
+        await lockRow(tx, 'rental_vehicle', meta.rentalVehicleId);
+      } else if (meta.privateEvId) {
+        await lockRow(tx, 'private_ev', meta.privateEvId);
+      }
     }
     if (meta.chargingPointId) {
       await lockRow(tx, 'charging_point', meta.chargingPointId);
     }
-    await lockRow(tx, 'charging_request', requestId);
+  }
+  await lockRow(tx, 'charging_request', requestId);
 
-    const req = await tx.chargingRequest.findUnique({ where: { id: requestId } });
-    if (!req) {
-      if (opts.strict) throw notFound('Charging request');
-      return null;
+  const req = await tx.chargingRequest.findUnique({ where: { id: requestId } });
+  if (!req) {
+    if (opts.strict) throw notFound('Charging request');
+    return null;
+  }
+
+  if (req.status !== 'CHARGING') {
+    if (opts.strict) {
+      assertTransition('chargingRequest', req.status, 'COMPLETED');
     }
+    return null;
+  }
 
-    if (req.status !== 'CHARGING') {
-      if (opts.strict) {
-        assertTransition('chargingRequest', req.status, 'COMPLETED');
-      }
-      return null;
-    }
+  assertTransition('chargingRequest', req.status, 'COMPLETED');
 
-    assertTransition('chargingRequest', req.status, 'COMPLETED');
-
-    const finalPct = req.currentPct;
-    const completed = await tx.chargingRequest.update({
-      where: { id: req.id },
-      data: {
-        status: 'COMPLETED',
-        endReason: reason,
-        finalPct,
-        endedAt: now,
-      },
-    });
-
-    if (req.chargingPointId) {
-      // Lock if chargingPointId was assigned after initial meta read (defensive).
-      if (req.chargingPointId !== meta.chargingPointId) {
-        await lockRow(tx, 'charging_point', req.chargingPointId);
-      }
-      const point = await tx.chargingPoint.findUnique({ where: { id: req.chargingPointId } });
-      if (point && point.status === 'CHARGING') {
-        assertTransition('chargingPoint', point.status, 'AVAILABLE');
-        await tx.chargingPoint.update({
-          where: { id: point.id },
-          data: { status: 'AVAILABLE' },
-        });
-      }
-    }
-
-    // Rental vehicle LOW_BATTERY -> AVAILABLE once finalPct >= MIN_RENTAL_BATTERY_PCT (BR-02).
-    if (req.vehicleKind === 'RENTAL' && req.rentalVehicleId) {
-      const vehicle = await tx.rentalVehicle.findUnique({ where: { id: req.rentalVehicleId } });
-      if (
-        vehicle &&
-        vehicle.status === 'LOW_BATTERY' &&
-        finalPct >= config.MIN_RENTAL_BATTERY_PCT
-      ) {
-        assertTransition('rentalVehicle', vehicle.status, 'AVAILABLE');
-        await tx.rentalVehicle.update({
-          where: { id: vehicle.id },
-          data: { status: 'AVAILABLE' },
-        });
-      }
-    }
-
-    // FR-62 notifications inside the same transaction.
-    if (req.ownerId) {
-      if (reason === 'TARGET_REACHED') {
-        await notify(tx, {
-          userId: req.ownerId,
-          type: 'CHARGING_COMPLETED',
-          title: 'Charging completed',
-          body: `Your vehicle reached ${finalPct}% battery at Hub ${req.hubId}.`,
-          data: {
-            chargingRequestId: req.id,
-            hubId: req.hubId,
-            chargingPointId: req.chargingPointId,
-            finalPct,
-          },
-        });
-      } else if (reason === 'POINT_FAILURE' || reason === 'VEHICLE_FAULT') {
-        await notify(tx, {
-          userId: req.ownerId,
-          type: 'CHARGING_ENDED_FAULT',
-          title: 'Charging ended due to fault',
-          body: `Your charging session at Hub ${req.hubId} ended at ${finalPct}% (${reason}).`,
-          data: {
-            chargingRequestId: req.id,
-            hubId: req.hubId,
-            chargingPointId: req.chargingPointId,
-            endReason: reason,
-            finalPct,
-          },
-        });
-      }
-      // USER_STOP: no notification (the user initiated the stop).
-    }
-
-    return completed;
+  const finalPct = req.currentPct;
+  const completed = await tx.chargingRequest.update({
+    where: { id: req.id },
+    data: {
+      status: 'COMPLETED',
+      endReason: reason,
+      finalPct,
+      endedAt: now,
+    },
   });
+
+  if (req.chargingPointId) {
+    // Lock if chargingPointId was assigned after initial meta read (defensive).
+    if (opts.lockedResource !== 'charging_point' && req.chargingPointId !== meta.chargingPointId) {
+      await lockRow(tx, 'charging_point', req.chargingPointId);
+    }
+    const point = await tx.chargingPoint.findUnique({ where: { id: req.chargingPointId } });
+    // On POINT_FAILURE incident recovery, the point is already FAULTY and stays FAULTY.
+    if (point && point.status === 'CHARGING') {
+      assertTransition('chargingPoint', point.status, 'AVAILABLE');
+      await tx.chargingPoint.update({
+        where: { id: point.id },
+        data: { status: 'AVAILABLE' },
+      });
+    }
+  }
+
+  // Rental vehicle LOW_BATTERY -> AVAILABLE once finalPct >= MIN_RENTAL_BATTERY_PCT (BR-02).
+  // On VEHICLE_FAULT incident recovery, the vehicle is already FAULTY and stays FAULTY.
+  if (req.vehicleKind === 'RENTAL' && req.rentalVehicleId) {
+    const vehicle = await tx.rentalVehicle.findUnique({ where: { id: req.rentalVehicleId } });
+    if (
+      vehicle &&
+      vehicle.status === 'LOW_BATTERY' &&
+      finalPct >= config.MIN_RENTAL_BATTERY_PCT
+    ) {
+      assertTransition('rentalVehicle', vehicle.status, 'AVAILABLE');
+      await tx.rentalVehicle.update({
+        where: { id: vehicle.id },
+        data: { status: 'AVAILABLE' },
+      });
+    }
+  }
+
+  // FR-62 notifications inside the same transaction.
+  if (!opts.skipNotify && req.ownerId) {
+    if (reason === 'TARGET_REACHED') {
+      await notify(tx, {
+        userId: req.ownerId,
+        type: 'CHARGING_COMPLETED',
+        title: 'Charging completed',
+        body: `Your vehicle reached ${finalPct}% battery at Hub ${req.hubId}.`,
+        data: {
+          chargingRequestId: req.id,
+          hubId: req.hubId,
+          chargingPointId: req.chargingPointId,
+          finalPct,
+        },
+      });
+    } else if (reason === 'POINT_FAILURE' || reason === 'VEHICLE_FAULT') {
+      await notify(tx, {
+        userId: req.ownerId,
+        type: 'CHARGING_ENDED_FAULT',
+        title: 'Charging ended due to fault',
+        body: `Your charging session at Hub ${req.hubId} ended at ${finalPct}% (${reason}).`,
+        data: {
+          chargingRequestId: req.id,
+          hubId: req.hubId,
+          chargingPointId: req.chargingPointId,
+          endReason: reason,
+          finalPct,
+        },
+      });
+    }
+    // USER_STOP: no notification (the user initiated the stop).
+  }
+
+  return completed;
+}
+
+export async function endSession(
+  requestId: string,
+  reason: ChargingEndReason,
+  now: Date = new Date(),
+  opts: { strict?: boolean } = {},
+): Promise<ChargingRequest | null> {
+  const ended = await db.$transaction(async (tx) =>
+    endSessionInTx(tx, requestId, reason, now, opts),
+  );
 
   if (ended) {
     events.emit('CHARGING_QUEUE_CHANGED', { hubId: ended.hubId });
@@ -627,4 +654,288 @@ export async function listChargingHistory(
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     take: opts.take,
   });
+}
+
+export type ChargingRecoveryVehicleTarget =
+  | { rentalVehicleId: string; privateEvId?: undefined }
+  | { privateEvId: string; rentalVehicleId?: undefined };
+
+/**
+ * FR-39, FR-40, BR-07 (T-22 Rule 4): Recover active charging requests for a withdrawn vehicle
+ * inside the caller's incident transaction (vehicle row is already locked).
+ * - QUEUED / SCHEDULED -> CANCELLED + CHARGING_CANCELLED notification (when ownerId is set).
+ * - CHARGING -> endSessionInTx(..., 'VEHICLE_FAULT') (point -> AVAILABLE, CHARGING_ENDED_FAULT).
+ */
+export async function recoverChargingForVehicle(
+  tx: Tx,
+  target: ChargingRecoveryVehicleTarget,
+  now: Date = new Date(),
+): Promise<IncidentImpact[]> {
+  const where = target.rentalVehicleId
+    ? { rentalVehicleId: target.rentalVehicleId }
+    : { privateEvId: target.privateEvId };
+
+  const candidates = await tx.chargingRequest.findMany({
+    where: {
+      ...where,
+      status: { in: ['QUEUED', 'SCHEDULED', 'CHARGING'] },
+    },
+    orderBy: { id: 'asc' },
+    select: { id: true, chargingPointId: true },
+  });
+
+  const impacts: IncidentImpact[] = [];
+
+  for (const candidate of candidates) {
+    // Lock order: vehicle [already locked] -> charging_point -> charging_request.
+    if (candidate.chargingPointId) {
+      await lockRow(tx, 'charging_point', candidate.chargingPointId);
+    }
+    await lockRow(tx, 'charging_request', candidate.id);
+
+    const req = await tx.chargingRequest.findUnique({ where: { id: candidate.id } });
+    if (!req || (req.status !== 'QUEUED' && req.status !== 'SCHEDULED' && req.status !== 'CHARGING')) {
+      continue;
+    }
+
+    if (req.status === 'QUEUED' || req.status === 'SCHEDULED') {
+      assertTransition('chargingRequest', req.status, 'CANCELLED');
+      await tx.chargingRequest.update({
+        where: { id: req.id },
+        data: {
+          status: 'CANCELLED',
+          endedAt: now,
+        },
+      });
+
+      if (req.ownerId) {
+        await notify(tx, {
+          userId: req.ownerId,
+          type: 'CHARGING_CANCELLED',
+          title: 'Charging request cancelled',
+          body: `Your charging request at Hub ${req.hubId} was cancelled due to a vehicle fault.`,
+          data: {
+            chargingRequestId: req.id,
+            rentalVehicleId: req.rentalVehicleId,
+            privateEvId: req.privateEvId,
+            hubId: req.hubId,
+            reason: 'VEHICLE_FAULT',
+          },
+        });
+      }
+
+      impacts.push({
+        bookingType: 'CHARGING_REQUEST',
+        bookingId: req.id,
+        userId: req.ownerId,
+        outcome: 'CANCELLED',
+        newResourceId: null,
+      });
+    } else {
+      // CHARGING: ends session, releases charging point to AVAILABLE, notifies owner CHARGING_ENDED_FAULT.
+      const ended = await endSessionInTx(tx, req.id, 'VEHICLE_FAULT', now, {
+        lockedResource: target.rentalVehicleId ? 'rental_vehicle' : undefined,
+      });
+      if (ended) {
+        impacts.push({
+          bookingType: 'CHARGING_REQUEST',
+          bookingId: req.id,
+          userId: req.ownerId,
+          outcome: 'ENDED',
+          newResourceId: null,
+        });
+      }
+    }
+  }
+
+  return impacts;
+}
+
+export interface RecoverChargingPointInput {
+  id: string;
+  hubId: string;
+  vehicleClass: VehicleClass;
+}
+
+/**
+ * FR-39, FR-40, BR-07, UC-22 A1 (T-22 Rule 4): Recover SCHEDULED and CHARGING requests on a
+ * withdrawn FAULTY charging point inside the caller's incident transaction (point already locked).
+ * - SCHEDULED -> reassign to another free non-FAULTY point of the same class (SKIP LOCKED) +
+ *   RESERVATION_REASSIGNED (with data.chargingRequestId), or CANCELLED + CHARGING_CANCELLED.
+ * - CHARGING -> endSessionInTx(..., 'POINT_FAILURE') (point stays FAULTY) + requeue with
+ *   manualAdjust = MANUAL_ADJUST_STEP + one CHARGING_REQUEUED notification (data has both ids).
+ */
+export async function recoverChargingForPoint(
+  tx: Tx,
+  point: RecoverChargingPointInput,
+  now: Date = new Date(),
+): Promise<IncidentImpact[]> {
+  const candidates = await tx.chargingRequest.findMany({
+    where: {
+      chargingPointId: point.id,
+      status: { in: ['SCHEDULED', 'CHARGING'] },
+    },
+    orderBy: [{ slotStart: 'asc' }, { id: 'asc' }],
+    select: { id: true },
+  });
+
+  const impacts: IncidentImpact[] = [];
+
+  for (const candidate of candidates) {
+    // Lock order: withdrawn charging_point [already locked] -> charging_request.
+    // Replacement points are picked via FOR UPDATE SKIP LOCKED (never waits, cannot deadlock).
+    await lockRow(tx, 'charging_request', candidate.id);
+
+    const req = await tx.chargingRequest.findUnique({ where: { id: candidate.id } });
+    if (!req || req.chargingPointId !== point.id) {
+      continue;
+    }
+
+    if (req.status === 'SCHEDULED') {
+      let replacementPointId: string | null = null;
+
+      if (req.slotStart && req.slotEnd) {
+        // BR-10, BR-13, T-20 rule: free non-FAULTY point of the same class at the same Hub.
+        // SKIP LOCKED never waits, so taking a replacement resource after locking bookings cannot deadlock.
+        const freePoints = await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT cp.id
+          FROM charging_point cp
+          WHERE cp."hubId" = ${point.hubId}
+            AND cp.id != ${point.id}
+            AND cp."vehicleClass" = ${req.vehicleClass}::"VehicleClass"
+            AND cp.status != 'FAULTY'::"ChargingPointStatus"
+            AND NOT EXISTS (
+              SELECT 1
+              FROM charging_request cr
+              WHERE cr."chargingPointId" = cp.id
+                AND cr.status IN ('SCHEDULED', 'CHARGING')
+                AND cr."slotStart" < ${req.slotEnd}
+                AND cr."slotEnd" > ${req.slotStart}
+            )
+          ORDER BY cp.id
+          LIMIT 1
+          FOR UPDATE OF cp SKIP LOCKED
+        `;
+        replacementPointId = freePoints[0]?.id ?? null;
+      }
+
+      if (replacementPointId) {
+        await tx.chargingRequest.update({
+          where: { id: req.id },
+          data: { chargingPointId: replacementPointId },
+        });
+
+        if (req.ownerId) {
+          await notify(tx, {
+            userId: req.ownerId,
+            type: 'RESERVATION_REASSIGNED',
+            title: 'Charging slot reassigned',
+            body: `Your scheduled charging slot at Hub ${req.hubId} was moved from point ${point.id} to ${replacementPointId}.`,
+            data: {
+              chargingRequestId: req.id,
+              oldChargingPointId: point.id,
+              newChargingPointId: replacementPointId,
+              hubId: req.hubId,
+            },
+          });
+        }
+
+        impacts.push({
+          bookingType: 'CHARGING_REQUEST',
+          bookingId: req.id,
+          userId: req.ownerId,
+          outcome: 'REASSIGNED',
+          newResourceId: replacementPointId,
+        });
+      } else {
+        assertTransition('chargingRequest', req.status, 'CANCELLED');
+        await tx.chargingRequest.update({
+          where: { id: req.id },
+          data: {
+            status: 'CANCELLED',
+            endedAt: now,
+          },
+        });
+
+        if (req.ownerId) {
+          await notify(tx, {
+            userId: req.ownerId,
+            type: 'CHARGING_CANCELLED',
+            title: 'Charging booking cancelled',
+            body: `Your scheduled charging booking on point ${point.id} at Hub ${req.hubId} was cancelled because no replacement point was available.`,
+            data: {
+              chargingRequestId: req.id,
+              chargingPointId: point.id,
+              hubId: req.hubId,
+              reason: 'POINT_FAILURE',
+            },
+          });
+        }
+
+        impacts.push({
+          bookingType: 'CHARGING_REQUEST',
+          bookingId: req.id,
+          userId: req.ownerId,
+          outcome: 'CANCELLED',
+          newResourceId: null,
+        });
+      }
+    } else if (req.status === 'CHARGING') {
+      // Point is already FAULTY (stays FAULTY); skipNotify so owner receives exactly one CHARGING_REQUEUED notification.
+      const ended = await endSessionInTx(tx, req.id, 'POINT_FAILURE', now, {
+        skipNotify: true,
+        lockedResource: 'charging_point',
+      });
+      if (!ended) {
+        continue;
+      }
+
+      const finalPct = ended.finalPct ?? req.currentPct;
+      // UC-22 A1: requeue with priority boost MANUAL_ADJUST_STEP.
+      const requeued = await createQueueRequest(
+        tx,
+        {
+          requestedById: req.requestedById,
+          ownerId: req.ownerId,
+          vehicleKind: req.vehicleKind,
+          rentalVehicleId: req.rentalVehicleId,
+          privateEvId: req.privateEvId,
+          vehicleClass: req.vehicleClass,
+          hubId: req.hubId,
+          targetPct: req.targetPct,
+          currentPct: finalPct,
+          desiredTime: now,
+          neededBy: req.neededBy,
+          manualAdjust: config.MANUAL_ADJUST_STEP,
+        },
+        now,
+      );
+
+      if (req.ownerId) {
+        await notify(tx, {
+          userId: req.ownerId,
+          type: 'CHARGING_REQUEUED',
+          title: 'Charging session requeued',
+          body: `Your charging session on point ${point.id} at Hub ${req.hubId} ended at ${finalPct}% due to a charger fault and has been requeued with priority.`,
+          data: {
+            chargingRequestId: req.id,
+            newChargingRequestId: requeued.id,
+            chargingPointId: point.id,
+            hubId: req.hubId,
+            finalPct,
+          },
+        });
+      }
+
+      impacts.push({
+        bookingType: 'CHARGING_REQUEST',
+        bookingId: req.id,
+        userId: req.ownerId,
+        outcome: 'ENDED',
+        newResourceId: null,
+      });
+    }
+  }
+
+  return impacts;
 }

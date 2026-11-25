@@ -21,6 +21,8 @@ import { isDegraded } from '../hubs/hubs.metrics';
 import { alternativeHubs } from '../hubs/hubs.service';
 import type { ChargingRequestView } from '../../types/charging';
 import type { Alternative } from '../../types/common';
+import type { RentalVehicleType } from '../../types/enums';
+import type { IncidentImpact } from '../../types/incidents';
 import type { VehicleReservation, VehicleReturnResult } from '../../types/reservations';
 import { isVehicleCharging, toRentalVehicleDto } from './vehicles.service';
 
@@ -1015,4 +1017,181 @@ export async function expireVehicleHolds(now: Date = new Date()): Promise<number
   }
 
   return expiredCount;
+}
+
+export interface RecoverVehicleInput {
+  id: string;
+  hubId: string;
+  type: RentalVehicleType;
+  batteryPct: number;
+}
+
+/**
+ * FR-39, FR-40, BR-02, BR-07, D-18 (T-22 Rule 4): Recover CONFIRMED and ACTIVE vehicle
+ * reservations on a withdrawn FAULTY rental vehicle inside the caller's incident transaction
+ * (withdrawn vehicle row is already locked).
+ * - CONFIRMED -> reassign to an eligible AVAILABLE vehicle at the same Hub (battery >= MIN,
+ *   not CHARGING, same type preferred, SKIP LOCKED; expiresAt & hubId kept) + RESERVATION_REASSIGNED,
+ *   or CANCELLED (endReason INCIDENT) + RESERVATION_CANCELLED.
+ * - ACTIVE -> COMPLETED (endReason INCIDENT, endBatteryPct = vehicle.batteryPct) + RENTAL_ENDED_INCIDENT.
+ */
+export async function recoverVehicleBookings(
+  tx: Tx,
+  vehicle: RecoverVehicleInput,
+  now: Date = new Date(),
+): Promise<IncidentImpact[]> {
+  const candidates = await tx.vehicleReservation.findMany({
+    where: {
+      rentalVehicleId: vehicle.id,
+      status: { in: ['CONFIRMED', 'ACTIVE'] },
+    },
+    orderBy: { id: 'asc' },
+    select: { id: true },
+  });
+
+  const impacts: IncidentImpact[] = [];
+
+  for (const candidate of candidates) {
+    // Lock order: withdrawn rental_vehicle [already locked] -> vehicle_reservation.
+    // Replacement vehicles are picked via FOR UPDATE SKIP LOCKED (never waits, cannot deadlock).
+    await lockRow(tx, 'vehicle_reservation', candidate.id);
+
+    const res = await tx.vehicleReservation.findUnique({ where: { id: candidate.id } });
+    if (
+      !res ||
+      res.rentalVehicleId !== vehicle.id ||
+      (res.status !== 'CONFIRMED' && res.status !== 'ACTIVE')
+    ) {
+      continue;
+    }
+
+    if (res.status === 'CONFIRMED') {
+      // BR-02, BR-10, D-18: eligible replacement at the same Hub, same type preferred.
+      // SKIP LOCKED never waits, so taking a replacement resource after locking bookings cannot deadlock.
+      const replacements = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT rv.id
+        FROM rental_vehicle rv
+        WHERE rv."hubId" = ${vehicle.hubId}
+          AND rv.id != ${vehicle.id}
+          AND rv.status = 'AVAILABLE'::"RentalVehicleStatus"
+          AND rv."batteryPct" >= ${config.MIN_RENTAL_BATTERY_PCT}
+          AND NOT EXISTS (
+            SELECT 1
+            FROM charging_request cr
+            WHERE cr."rentalVehicleId" = rv.id
+              AND cr.status = 'CHARGING'::"ChargingRequestStatus"
+          )
+        ORDER BY
+          CASE WHEN rv.type = ${vehicle.type}::"RentalVehicleType" THEN 0 ELSE 1 END,
+          rv."batteryPct" DESC,
+          rv.id ASC
+        LIMIT 1
+        FOR UPDATE OF rv SKIP LOCKED
+      `;
+
+      const replacementId = replacements[0]?.id ?? null;
+
+      if (replacementId) {
+        assertTransition('rentalVehicle', 'AVAILABLE', 'RESERVED');
+        await tx.rentalVehicle.update({
+          where: { id: replacementId },
+          data: { status: 'RESERVED' },
+        });
+
+        await tx.vehicleReservation.update({
+          where: { id: res.id },
+          data: { rentalVehicleId: replacementId },
+        });
+
+        // D-18: reserving the replacement vehicle cancels any QUEUED charging request on it.
+        await cancelQueuedForVehicle(tx, replacementId, now);
+
+        await notify(tx, {
+          userId: res.userId,
+          type: 'RESERVATION_REASSIGNED',
+          title: 'Vehicle reservation reassigned',
+          body: `Your reservation at Hub ${res.hubId} was moved from vehicle ${vehicle.id} to ${replacementId}.`,
+          data: {
+            reservationId: res.id,
+            oldVehicleId: vehicle.id,
+            newVehicleId: replacementId,
+            hubId: res.hubId,
+          },
+        });
+
+        impacts.push({
+          bookingType: 'VEHICLE_RESERVATION',
+          bookingId: res.id,
+          userId: res.userId,
+          outcome: 'REASSIGNED',
+          newResourceId: replacementId,
+        });
+      } else {
+        assertTransition('reservation', res.status, 'CANCELLED');
+        await tx.vehicleReservation.update({
+          where: { id: res.id },
+          data: {
+            status: 'CANCELLED',
+            endReason: 'INCIDENT',
+          },
+        });
+
+        await notify(tx, {
+          userId: res.userId,
+          type: 'RESERVATION_CANCELLED',
+          title: 'Vehicle reservation cancelled',
+          body: `Your reservation for vehicle ${vehicle.id} at Hub ${res.hubId} was cancelled because the vehicle became faulty and no replacement was available.`,
+          data: {
+            reservationId: res.id,
+            vehicleId: vehicle.id,
+            hubId: res.hubId,
+            reason: 'INCIDENT',
+          },
+        });
+
+        impacts.push({
+          bookingType: 'VEHICLE_RESERVATION',
+          bookingId: res.id,
+          userId: res.userId,
+          outcome: 'CANCELLED',
+          newResourceId: null,
+        });
+      }
+    } else {
+      // ACTIVE rental: cannot swap mid-ride; end with endReason INCIDENT and vehicle's batteryPct.
+      assertTransition('reservation', res.status, 'COMPLETED');
+      await tx.vehicleReservation.update({
+        where: { id: res.id },
+        data: {
+          status: 'COMPLETED',
+          endReason: 'INCIDENT',
+          returnedAt: now,
+          endBatteryPct: vehicle.batteryPct,
+        },
+      });
+
+      await notify(tx, {
+        userId: res.userId,
+        type: 'RENTAL_ENDED_INCIDENT',
+        title: 'Rental ended due to vehicle incident',
+        body: `Your rental of vehicle ${vehicle.id} was ended due to a reported fault. Please park it safely.`,
+        data: {
+          reservationId: res.id,
+          vehicleId: vehicle.id,
+          hubId: res.hubId,
+          endBatteryPct: vehicle.batteryPct,
+        },
+      });
+
+      impacts.push({
+        bookingType: 'VEHICLE_RESERVATION',
+        bookingId: res.id,
+        userId: res.userId,
+        outcome: 'ENDED',
+        newResourceId: null,
+      });
+    }
+  }
+
+  return impacts;
 }
