@@ -3,20 +3,36 @@
 // Lock order: withdrawn resource first -> affected bookings; replacement resources are
 // picked via FOR UPDATE SKIP LOCKED (never waiting, so deadlock-free).
 
-import { Prisma, type Incident as PrismaIncident } from '@prisma/client';
+import {
+  Prisma,
+  type Incident as PrismaIncident,
+  type IncidentImpact as PrismaIncidentImpact,
+  type IncidentReport as PrismaIncidentReport,
+} from '@prisma/client';
 import { audit } from '../../core/audit';
+import { config } from '../../core/config';
 import { db, lockRow, type LockableTable, type Tx } from '../../core/db';
 import { AppError, badRequest, notFound } from '../../core/errors';
 import { events } from '../../core/events';
+import { encodeCursor, type ListCursor } from '../../core/pagination';
 import { assertTransition } from '../../core/stateMachine';
 import {
   INCIDENT_CATEGORIES,
   type IncidentCategory,
   type IncidentResourceType,
   type IncidentSource,
+  type IncidentStatus,
+  type Role,
   type VehicleClass,
 } from '../../types/enums';
-import type { Incident, IncidentImpact, ReportIncidentResult } from '../../types/incidents';
+import type {
+  Incident,
+  IncidentDetail,
+  IncidentImpact,
+  IncidentList,
+  IncidentReportView,
+  ReportIncidentResult,
+} from '../../types/incidents';
 import * as chargingRequestsService from '../charging/chargingRequests.service';
 import * as parkingReservationsService from '../reservations/parkingReservations.service';
 import * as vehicleReservationsService from '../reservations/vehicleReservations.service';
@@ -613,4 +629,315 @@ export async function reportIncident(
   }
 
   return outcome.result;
+}
+
+export interface IncidentActor {
+  id: string;
+  role: Role;
+}
+
+export interface IncidentListFilters {
+  hubId?: string;
+  resourceId?: string;
+  vehicleClass?: VehicleClass;
+  category?: IncidentCategory;
+  status?: IncidentStatus;
+  from?: Date;
+  to?: Date;
+}
+
+export interface IncidentListPageOptions {
+  limit: number;
+  cursor: ListCursor | null;
+}
+
+function toIncidentReportView(row: PrismaIncidentReport): IncidentReportView {
+  return {
+    source: row.source,
+    reportedById: row.reportedById ?? null,
+    notes: row.notes,
+    createdAt: row.createdAt.toISOString(),
+  };
+}
+
+function toIncidentImpactDto(row: PrismaIncidentImpact): IncidentImpact {
+  return {
+    bookingType: row.bookingType,
+    bookingId: row.bookingId,
+    userId: row.userId ?? null,
+    outcome: row.outcome,
+    newResourceId: row.newResourceId ?? null,
+  };
+}
+
+/**
+ * FR-41, FR-63, BR-05 (T-23 Rule 1): Move a REPORTED incident to IN_MAINTENANCE.
+ * Resource stays withdrawn; no post-commit events.
+ */
+export async function startMaintenance(
+  actor: IncidentActor,
+  incidentId: string,
+  notes?: string,
+  now: Date = new Date(),
+): Promise<Incident> {
+  let trimmedNotes: string | undefined;
+  if (notes !== undefined) {
+    const trimmed = notes.trim();
+    if (trimmed.length > OPERATOR_NOTES_MAX) {
+      throw badRequest(`notes must be at most ${OPERATOR_NOTES_MAX} characters.`, 'notes');
+    }
+    trimmedNotes = trimmed.length > 0 ? trimmed : undefined;
+  }
+
+  return db.$transaction(async (tx) => {
+    await lockRow(tx, 'incident', incidentId);
+    const inc = await tx.incident.findUniqueOrThrow({ where: { id: incidentId } });
+
+    assertTransition('incident', inc.status, 'IN_MAINTENANCE');
+
+    const updated = await tx.incident.update({
+      where: { id: inc.id },
+      data: {
+        status: 'IN_MAINTENANCE',
+        inMaintenanceAt: now,
+      },
+    });
+
+    // Incident has no maintenance notes column; optional operator notes live only in the audit row.
+    await audit(tx, {
+      actorId: actor.id,
+      actorRole: actor.role,
+      action: 'INCIDENT_MAINTENANCE_STARTED',
+      entityType: 'incident',
+      entityIds: [inc.id, inc.resourceId],
+      reason: trimmedNotes,
+    });
+
+    return toIncidentDto(updated);
+  });
+}
+
+/**
+ * FR-41, FR-63, BR-05 (T-23 Rule 2): Resolve an IN_MAINTENANCE incident with mandatory notes,
+ * returning the resource to service in the same transaction.
+ * Lock order: resource -> incident (matches reportIncident so resolve and new report cannot deadlock).
+ */
+export async function resolveIncident(
+  actor: IncidentActor,
+  incidentId: string,
+  resolutionNotes: string,
+  now: Date = new Date(),
+): Promise<Incident> {
+  // Rule 2: validate resolutionNotes before any DB read (no state change on invalid notes).
+  const trimmedNotes = typeof resolutionNotes === 'string' ? resolutionNotes.trim() : '';
+  if (trimmedNotes.length < 1) {
+    throw badRequest('resolutionNotes is required.', 'resolutionNotes');
+  }
+  if (trimmedNotes.length > OPERATOR_NOTES_MAX) {
+    throw badRequest(
+      `resolutionNotes must be at most ${OPERATOR_NOTES_MAX} characters.`,
+      'resolutionNotes',
+    );
+  }
+
+  const outcome = await db.$transaction(async (tx) => {
+    // 1. Unlocked read to learn resourceType / resourceId before taking locks in order.
+    const meta = await tx.incident.findUnique({
+      where: { id: incidentId },
+      select: { id: true, resourceType: true, resourceId: true },
+    });
+    if (!meta) {
+      throw notFound('Incident');
+    }
+
+    // 2. Lock resource first, then incident — same order as reportIncident so concurrent
+    // resolve and new report on the same resource cannot deadlock.
+    await lockRow(tx, tableForResourceType(meta.resourceType), meta.resourceId);
+    await lockRow(tx, 'incident', incidentId);
+
+    // 3. Re-read incident under the lock and validate state transition.
+    const inc = await tx.incident.findUniqueOrThrow({ where: { id: incidentId } });
+    assertTransition('incident', inc.status, 'RESOLVED');
+
+    // 4. Mark incident RESOLVED.
+    const updated = await tx.incident.update({
+      where: { id: inc.id },
+      data: {
+        status: 'RESOLVED',
+        resolutionNotes: trimmedNotes,
+        resolvedAt: now,
+      },
+    });
+
+    // 5. Return the resource to service via assertTransition only if still in the withdrawn state;
+    // if already changed out of band, skip the status write to avoid an invalid same-state/other move.
+    let resourceStatus: string;
+    if (inc.resourceType === 'RENTAL_VEHICLE') {
+      const vehicle = await tx.rentalVehicle.findUniqueOrThrow({
+        where: { id: inc.resourceId },
+      });
+      if (vehicle.status === 'FAULTY') {
+        const nextStatus =
+          vehicle.batteryPct >= config.MIN_RENTAL_BATTERY_PCT ? 'AVAILABLE' : 'LOW_BATTERY';
+        assertTransition('rentalVehicle', vehicle.status, nextStatus);
+        await tx.rentalVehicle.update({
+          where: { id: vehicle.id },
+          data: { status: nextStatus },
+        });
+        resourceStatus = nextStatus;
+      } else {
+        // Already outside FAULTY; keep its current status rather than forcing a transition.
+        resourceStatus = vehicle.status;
+      }
+    } else if (inc.resourceType === 'PARKING_SPACE') {
+      const space = await tx.parkingSpace.findUniqueOrThrow({
+        where: { id: inc.resourceId },
+      });
+      if (space.status === 'UNAVAILABLE') {
+        assertTransition('parkingSpace', space.status, 'FREE');
+        // Read-only check on linked rental vehicle (do NOT lockRow it: locking rental_vehicle after
+        // parking_space would invert T-12's rental_vehicle -> parking_space lock order; the space lock suffices).
+        const linkedVehicle = await tx.rentalVehicle.findUnique({
+          where: { parkingSpaceId: space.id },
+          select: { id: true },
+        });
+        if (linkedVehicle) {
+          assertTransition('parkingSpace', 'FREE', 'OCCUPIED');
+          await tx.parkingSpace.update({
+            where: { id: space.id },
+            data: { status: 'OCCUPIED' },
+          });
+          resourceStatus = 'OCCUPIED';
+        } else {
+          await tx.parkingSpace.update({
+            where: { id: space.id },
+            data: { status: 'FREE' },
+          });
+          resourceStatus = 'FREE';
+        }
+      } else {
+        // Already outside UNAVAILABLE; keep its current status.
+        resourceStatus = space.status;
+      }
+    } else {
+      const point = await tx.chargingPoint.findUniqueOrThrow({
+        where: { id: inc.resourceId },
+      });
+      if (point.status === 'FAULTY') {
+        assertTransition('chargingPoint', point.status, 'AVAILABLE');
+        await tx.chargingPoint.update({
+          where: { id: point.id },
+          data: { status: 'AVAILABLE' },
+        });
+        resourceStatus = 'AVAILABLE';
+      } else {
+        // Already outside FAULTY; keep its current status.
+        resourceStatus = point.status;
+      }
+    }
+
+    // 6. Audit inside the same transaction.
+    await audit(tx, {
+      actorId: actor.id,
+      actorRole: actor.role,
+      action: 'INCIDENT_RESOLVED',
+      entityType: 'incident',
+      entityIds: [inc.id, inc.resourceId],
+      reason: trimmedNotes,
+      details: { resourceStatus },
+    });
+
+    // Take hubId from the locked incident row for post-commit event emission.
+    return {
+      dto: toIncidentDto(updated),
+      hubId: inc.hubId,
+      resourceType: inc.resourceType,
+    };
+  });
+
+  // Post-commit events only after db.$transaction resolves.
+  if (outcome.resourceType === 'CHARGING_POINT') {
+    events.emit('CHARGING_QUEUE_CHANGED', { hubId: outcome.hubId });
+  } else {
+    events.emit('RESERVATION_CHANGED', { hubId: outcome.hubId });
+  }
+
+  return outcome.dto;
+}
+
+/**
+ * FR-42, UC-23 (T-23 Rule 3): Search the incident log with optional exact/range filters
+ * and cursor pagination (`createdAt DESC, id DESC`). Read-only, no transaction.
+ */
+export async function listIncidents(
+  filters: IncidentListFilters,
+  page: IncidentListPageOptions,
+): Promise<IncidentList> {
+  if (filters.from && filters.to && filters.from.getTime() > filters.to.getTime()) {
+    throw badRequest('to must be on or after from.', 'to');
+  }
+
+  const createdAtRange: Prisma.DateTimeFilter = {};
+  if (filters.from) createdAtRange.gte = filters.from;
+  if (filters.to) createdAtRange.lte = filters.to;
+
+  const where: Prisma.IncidentWhereInput = {
+    ...(filters.hubId ? { hubId: filters.hubId } : {}),
+    ...(filters.resourceId ? { resourceId: filters.resourceId } : {}),
+    ...(filters.vehicleClass ? { vehicleClass: filters.vehicleClass } : {}),
+    ...(filters.category ? { category: filters.category } : {}),
+    ...(filters.status ? { status: filters.status } : {}),
+    ...(filters.from || filters.to ? { createdAt: createdAtRange } : {}),
+    ...(page.cursor
+      ? {
+          OR: [
+            { createdAt: { lt: page.cursor.createdAt } },
+            { createdAt: page.cursor.createdAt, id: { lt: page.cursor.id } },
+          ],
+        }
+      : {}),
+  };
+
+  const rows = await db.incident.findMany({
+    where,
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    take: page.limit + 1,
+  });
+
+  const hasMore = rows.length > page.limit;
+  const pageRows = hasMore ? rows.slice(0, page.limit) : rows;
+  const lastRow = pageRows[pageRows.length - 1];
+  const nextCursor = hasMore && lastRow ? encodeCursor(lastRow) : null;
+
+  return {
+    items: pageRows.map(toIncidentDto),
+    nextCursor,
+  };
+}
+
+/**
+ * UC-23 (T-23 Rule 4): Get one incident with its reports (oldest first) and impacts.
+ */
+export async function getIncidentDetail(incidentId: string): Promise<IncidentDetail> {
+  const row = await db.incident.findUnique({
+    where: { id: incidentId },
+    include: {
+      reports: {
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      },
+      impacts: {
+        orderBy: { id: 'asc' },
+      },
+    },
+  });
+
+  if (!row) {
+    throw notFound('Incident');
+  }
+
+  return {
+    incident: toIncidentDto(row),
+    reports: row.reports.map(toIncidentReportView),
+    impacts: row.impacts.map(toIncidentImpactDto),
+  };
 }

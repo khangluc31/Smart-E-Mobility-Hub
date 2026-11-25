@@ -1,22 +1,30 @@
-// Incident routes: operator incident reporting (CONTRACTS §11, FR-37) and student vehicle
-// fault reporting (CONTRACTS §4, FR-13). Validates input, calls the service, sends the response.
-// No Prisma in routes (AGENTS.md §4).
+// Incident routes: operator incident reporting, lifecycle, list & detail (CONTRACTS §11,
+// FR-37..FR-42) and student vehicle fault reporting (CONTRACTS §4, FR-13).
+// Validates input, calls the service, sends the response. No Prisma in routes (AGENTS.md §4).
 
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import {
   badRequest,
+  optional,
   requireEnum,
+  requireIsoDate,
   requireString,
   unauthenticated,
 } from '../../core/errors';
+import { parseListQuery } from '../../core/pagination';
 import {
   INCIDENT_CATEGORIES,
   INCIDENT_RESOURCE_TYPES,
+  INCIDENT_STATUSES,
   VEHICLE_CLASSES,
 } from '../../types/enums';
 import {
+  getIncidentDetail,
+  listIncidents,
   OPERATOR_NOTES_MAX,
   reportIncident,
+  resolveIncident,
+  startMaintenance,
   STUDENT_NOTES_MAX,
 } from './incidents.service';
 
@@ -67,6 +75,86 @@ incidentsOpsRouter.post(
       reportedById: req.user.id,
     });
     res.status(201).json(result);
+  }),
+);
+
+// GET /api/ops/incidents (FR-42, UC-23)
+incidentsOpsRouter.get(
+  '/',
+  wrap(async (req, res) => {
+    const q = req.query as Record<string, unknown>;
+    const hubId = optional(requireString)(q, 'hubId', { trim: true, min: 1 });
+    const resourceId = optional(requireString)(q, 'resourceId', { trim: true, min: 1 });
+    const vehicleClass = optional(requireEnum)(q, 'vehicleClass', VEHICLE_CLASSES);
+    const category = optional(requireEnum)(q, 'category', INCIDENT_CATEGORIES);
+    const status = optional(requireEnum)(q, 'status', INCIDENT_STATUSES);
+    const from = optional(requireIsoDate)(q, 'from');
+    const to = optional(requireIsoDate)(q, 'to');
+    if (from && to && from.getTime() > to.getTime()) {
+      throw badRequest('to must be on or after from.', 'to');
+    }
+    const { limit, cursor } = parseListQuery(q);
+
+    const result = await listIncidents(
+      { hubId, resourceId, vehicleClass, category, status, from, to },
+      { limit, cursor },
+    );
+    res.status(200).json(result);
+  }),
+);
+
+// GET /api/ops/incidents/:id (UC-23)
+incidentsOpsRouter.get(
+  '/:id',
+  wrap(async (req, res) => {
+    const id = requireString(req.params as Record<string, unknown>, 'id', {
+      trim: true,
+      min: 1,
+    });
+    const detail = await getIncidentDetail(id);
+    res.status(200).json(detail);
+  }),
+);
+
+// POST /api/ops/incidents/:id/start-maintenance (FR-41)
+incidentsOpsRouter.post(
+  '/:id/start-maintenance',
+  wrap(async (req, res) => {
+    if (!req.user) throw unauthenticated();
+    const id = requireString(req.params as Record<string, unknown>, 'id', {
+      trim: true,
+      min: 1,
+    });
+    const body =
+      req.body === undefined || req.body === null ? {} : asObject(req.body);
+    const notes = optional(requireString)(body, 'notes', {
+      trim: true,
+      max: OPERATOR_NOTES_MAX,
+    });
+
+    const updated = await startMaintenance(req.user, id, notes);
+    res.status(200).json(updated);
+  }),
+);
+
+// POST /api/ops/incidents/:id/resolve (FR-41)
+incidentsOpsRouter.post(
+  '/:id/resolve',
+  wrap(async (req, res) => {
+    if (!req.user) throw unauthenticated();
+    const id = requireString(req.params as Record<string, unknown>, 'id', {
+      trim: true,
+      min: 1,
+    });
+    const body = asObject(req.body);
+    const resolutionNotes = requireString(body, 'resolutionNotes', {
+      trim: true,
+      min: 1,
+      max: OPERATOR_NOTES_MAX,
+    });
+
+    const resolved = await resolveIncident(req.user, id, resolutionNotes);
+    res.status(200).json(resolved);
   }),
 );
 
