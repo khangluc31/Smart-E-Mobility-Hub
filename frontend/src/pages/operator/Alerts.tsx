@@ -1,6 +1,6 @@
 // Operator Alerts Inbox (CONTRACTS §10, FR-33, FR-34, FR-35, UC-20).
 
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { BellRing, Check, RotateCcw, XCircle } from 'lucide-react';
 import { useHubs } from '@/hooks/useHubs';
@@ -56,16 +56,10 @@ type PendingAction = {
 
 export function Alerts() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const urlHubId = searchParams.get('hubId') ?? '';
+  const hubId = searchParams.get('hubId') ?? '';
 
   const [status, setStatus] = useState<AlertStatus>('OPEN');
   const [type, setType] = useState<AlertType | ''>('');
-  const [hubId, setHubId] = useState<string>(urlHubId);
-
-  // Sync hubId filter if the user navigates here with a new ?hubId= param (e.g. from Dashboard).
-  useEffect(() => {
-    setHubId(urlHubId);
-  }, [urlHubId]);
 
   const { data: hubs } = useHubs();
   const hubNameMap = useMemo(() => {
@@ -116,7 +110,6 @@ export function Alerts() {
 
   function handleHubChange(value: string) {
     const nextHubId = value === ALL_VALUE ? '' : value;
-    setHubId(nextHubId);
     const nextParams = new URLSearchParams(searchParams);
     if (nextHubId) {
       nextParams.set('hubId', nextHubId);
@@ -129,7 +122,6 @@ export function Alerts() {
   function handleResetFilters() {
     setStatus('OPEN');
     setType('');
-    setHubId('');
     if (searchParams.has('hubId')) {
       const nextParams = new URLSearchParams(searchParams);
       nextParams.delete('hubId');

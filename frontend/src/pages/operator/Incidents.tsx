@@ -109,14 +109,6 @@ function IncidentDetailDialog({
   const [maintenanceNotes, setMaintenanceNotes] = useState('');
   const [resolutionNotes, setResolutionNotes] = useState('');
 
-  useEffect(() => {
-    setMaintenanceNotes('');
-    setResolutionNotes('');
-    startMaintenanceMutation.reset();
-    resolveMutation.reset();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [incidentId]);
-
   async function handleStartMaintenance(e: React.FormEvent) {
     e.preventDefault();
     if (!incidentId) return;
@@ -415,54 +407,39 @@ export function Incidents() {
   // Incident detail dialog state
   const [selectedIncidentId, setSelectedIncidentId] = useState<string | null>(null);
 
-  // Report Incident dialog state (FR-37/38/39/40)
-  const [reportOpen, setReportOpen] = useState(false);
-  const [formHubId, setFormHubId] = useState('');
-  const [formResourceType, setFormResourceType] = useState<IncidentResourceType>('RENTAL_VEHICLE');
-  const [formResourceId, setFormResourceId] = useState('');
-  const [formVehicleClass, setFormVehicleClass] = useState<VehicleClass>('MOTORCYCLE');
-  const [formCategory, setFormCategory] = useState<IncidentCategory>('VEHICLE_FAULT');
+  // Report Incident dialog state (FR-37/38/39/40), initialised from ?report=1&... deep-link if present.
+  const [reportOpen, setReportOpen] = useState(() => searchParams.get('report') === '1');
+  const [formHubId, setFormHubId] = useState(() =>
+    searchParams.get('report') === '1' ? (searchParams.get('hubId') ?? '') : '',
+  );
+  const [formResourceType, setFormResourceType] = useState<IncidentResourceType>(() => {
+    if (searchParams.get('report') !== '1') return 'RENTAL_VEHICLE';
+    const paramType = searchParams.get('resourceType');
+    return isResourceType(paramType) ? paramType : 'RENTAL_VEHICLE';
+  });
+  const [formResourceId, setFormResourceId] = useState(() =>
+    searchParams.get('report') === '1' ? (searchParams.get('resourceId') ?? '') : '',
+  );
+  const [formVehicleClass, setFormVehicleClass] = useState<VehicleClass>(() => {
+    if (searchParams.get('report') !== '1') return 'MOTORCYCLE';
+    const paramClass = searchParams.get('vehicleClass');
+    return isVehicleClass(paramClass) ? paramClass : 'MOTORCYCLE';
+  });
+  const [formCategory, setFormCategory] = useState<IncidentCategory>(() => {
+    if (searchParams.get('report') !== '1') return 'VEHICLE_FAULT';
+    const paramType = searchParams.get('resourceType');
+    if (paramType === 'CHARGING_POINT') return 'CHARGER_FAULT';
+    if (paramType === 'PARKING_SPACE') return 'OBSTRUCTION';
+    return 'VEHICLE_FAULT';
+  });
   const [formNotes, setFormNotes] = useState('');
   const [createdResult, setCreatedResult] = useState<ReportIncidentResult | null>(null);
 
   const createIncidentMutation = useCreateIncident();
 
-  // Consume ?report=1&hubId=...&resourceType=...&resourceId=...&vehicleClass=... once and clear
-  // those query params so closing the dialog does not re-open it.
+  // Clear ?report=1&... query params after initial pre-fill so closing the dialog does not re-open it.
   useEffect(() => {
     if (searchParams.get('report') !== '1') return;
-
-    const paramHubId = searchParams.get('hubId') ?? '';
-    const paramResourceType = searchParams.get('resourceType');
-    const paramResourceId = searchParams.get('resourceId') ?? '';
-    const paramVehicleClass = searchParams.get('vehicleClass');
-
-    const resolvedType: IncidentResourceType = isResourceType(paramResourceType)
-      ? paramResourceType
-      : 'RENTAL_VEHICLE';
-
-    setFormHubId(paramHubId);
-    setFormResourceType(resolvedType);
-    setFormResourceId(paramResourceId);
-    setFormVehicleClass(
-      isVehicleClass(paramVehicleClass)
-        ? paramVehicleClass
-        : resolvedType === 'RENTAL_VEHICLE'
-          ? 'MOTORCYCLE'
-          : 'MOTORCYCLE',
-    );
-    setFormCategory(
-      resolvedType === 'CHARGING_POINT'
-        ? 'CHARGER_FAULT'
-        : resolvedType === 'PARKING_SPACE'
-          ? 'OBSTRUCTION'
-          : 'VEHICLE_FAULT',
-    );
-    setFormNotes('');
-    setCreatedResult(null);
-    createIncidentMutation.reset();
-    setReportOpen(true);
-
     const nextParams = new URLSearchParams(searchParams);
     nextParams.delete('report');
     nextParams.delete('hubId');
@@ -470,7 +447,6 @@ export function Incidents() {
     nextParams.delete('resourceId');
     nextParams.delete('vehicleClass');
     setSearchParams(nextParams, { replace: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, setSearchParams]);
 
   // Populate Hub-scoped resource picker from useOpsHubDetail when dialog is open & hub is selected
@@ -1061,6 +1037,7 @@ export function Incidents() {
 
       {/* Incident Detail Dialog (FR-39/40/41, UC-22/23) */}
       <IncidentDetailDialog
+        key={selectedIncidentId ?? 'closed'}
         incidentId={selectedIncidentId}
         hubNameMap={hubNameMap}
         onClose={() => setSelectedIncidentId(null)}
