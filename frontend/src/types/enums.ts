@@ -172,6 +172,7 @@ export const AUDIT_ACTIONS = [
   'CHARGING_WEIGHTS_RESET',
   'CHARGING_DISPATCHED',
   'CHARGING_OVERRIDE',
+  'INCIDENT_CREATED',
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 

@@ -148,26 +148,44 @@ describe('T-06 checker', () => {
     expect(rv.batteryPct).toBe(winner);
   });
 
-  it('D-17 fault codes change no status column', async () => {
+  it('D-17 low-battery telemetry changes no status; fault codes create FR-36 TELEMETRY incidents', async () => {
     const before = await snapshot();
     const last = await metroLast();
     const res = await post({
       hubId: 'metro',
       timestamp: after(last, 5000),
       source: 'SIMULATOR',
-      vehicles: [{ id: 'RV-M-001', batteryPct: 4, faultCode: 'E1' }],
+      vehicles: [
+        { id: 'RV-M-002', batteryPct: 4 },
+        { id: 'RV-M-001', batteryPct: 4, faultCode: 'E1' },
+      ],
       parkingSpaces: [{ id: 'MET-P-M-01', faultCode: 'E2' }],
       chargingPoints: [{ id: 'MET-CP-M-01', faultCode: 'E3' }],
     });
     expect(res.status).toBe(202);
     const now = await snapshot();
     const statuses = (rows: Array<{ id: string; status: string }>) => rows.map((r) => `${r.id}:${r.status}`);
-    expect(statuses(now.vehicles)).toEqual(statuses(before.vehicles));
-    expect(statuses(now.spaces)).toEqual(statuses(before.spaces));
-    expect(statuses(now.points)).toEqual(statuses(before.points));
+    // D-17: low-battery telemetry without a fault code leaves vehicle status unchanged
+    expect(now.vehicles.find((v) => v.id === 'RV-M-002')!.status).toBe('AVAILABLE');
+    expect(now.vehicles.find((v) => v.id === 'RV-M-002')!.batteryPct).toBe(4);
+    // FR-36 (ARCHITECTURE §7.3 step 4): afterCommit creates TELEMETRY incidents and withdraws faulted resources
+    expect(statuses(now.vehicles)).toEqual(
+      before.vehicles.map((r) => `${r.id}:${r.id === 'RV-M-001' ? 'FAULTY' : r.status}`),
+    );
+    expect(statuses(now.spaces)).toEqual(
+      before.spaces.map((r) => `${r.id}:${r.id === 'MET-P-M-01' ? 'UNAVAILABLE' : r.status}`),
+    );
+    expect(statuses(now.points)).toEqual(
+      before.points.map((r) => `${r.id}:${r.id === 'MET-CP-M-01' ? 'FAULTY' : r.status}`),
+    );
     expect(statuses(now.requests)).toEqual(statuses(before.requests));
     // battery itself is a physical fact and does change
     expect(now.vehicles.find((v) => v.id === 'RV-M-001')!.batteryPct).toBe(4);
+    const incidents = await db.incident.findMany({
+      where: { source: 'TELEMETRY' },
+      orderBy: { resourceId: 'asc' },
+    });
+    expect(incidents.map((i) => i.resourceId)).toEqual(['MET-CP-M-01', 'MET-P-M-01', 'RV-M-001']);
   });
 
   it('D-09 charging currentPct capped at target', async () => {
