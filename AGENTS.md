@@ -58,7 +58,7 @@ Module owners are listed in `docs/SPEC.md` §1.
 
 ## 6. Tests (Definition of Done needs them)
 
-- One test file per module: `backend/tests/<module>.test.ts`. **From T-07 the checker writes it** (from the ticket and SPEC, before reading the code); the writer writes no test file but runs lint, typecheck, build and the existing tests before handing over.
+- Test files live in `backend/tests/` (`<module>.test.ts`, or one file per ticket when a module has several). **The ticket's `Checker` field decides who writes it:** `REQUIRED` → the checker (fresh session, from the ticket and SPEC, before reading the code); `WRITER-TESTS` → the writer, from the ticket's AC table and checker notes; `SKIP` → no new test file. The writer always runs lint, typecheck, build and the existing tests before handing over.
 - **Test names start with the FR id:** `it('FR-06 rejects a second active reservation', …)`.
 - Cover every acceptance line in SPEC §6 for your FRs, plus boundaries (19/20 %, 84/85 %, 9/10-char reason) and the 403 for non-operators on your `/ops` routes.
 - Use `tests/helpers.ts` (`createTestApp`, `resetDb`, `loginAs`). Tests run against the real test Postgres, jobs off.
@@ -97,8 +97,8 @@ npm run lint && npm run typecheck   # root, both apps
 | Role | Tool | Does | Doesn't |
 |---|---|---|---|
 | Orchestrator | Claude Opus 5.5 (Claude Code) | Writes docs and tickets, reviews at milestones, designs the hard parts | Write production code directly |
-| Writer | Gemini Argon 4 Medium (Antigravity); fallback Neon 4 Medium when out of quota | Implements **one ticket** on its branch, runs lint/typecheck/build/existing tests, adds its `AI_USAGE_LOG.md` line, writes the PR description | Write the ticket's test file; edit files outside the ticket; change docs/schema without saying so |
-| Checker | Sonnet 4.6 Medium (Claude Code, **fresh session**, never the writer's) | Writes the module's tests **from the ticket and SPEC before reading the code**, runs lint/typecheck/tests/coverage/build, reports PASS/FAIL with the real run log, the ticket's AC table and a bug list | Fix the code itself (it reports; the writer fixes) |
+| Writer | Gemini Argon 4 Medium (Antigravity); fallback Neon 4 Medium when out of quota | Implements **one ticket** on its branch, runs lint/typecheck/build/existing tests, writes the ticket's test file on `WRITER-TESTS` tickets, adds its `AI_USAGE_LOG.md` line, writes the PR description | Write the test file on `REQUIRED` tickets; edit files outside the ticket; change docs/schema without saying so |
+| Checker | Sonnet 4.6 Medium (Claude Code, **fresh session**, never the writer's) | **Only on `REQUIRED` tickets:** writes the module's tests **from the ticket and SPEC before reading the code**, runs lint/typecheck/tests/coverage/build, reports PASS/FAIL with the real run log, the ticket's AC table and a bug list | Fix the code itself (it reports; the writer fixes) |
 | Helper | Haiku 5.5 (Claude Code) | Search the codebase, seed data, boilerplate, `AI_USAGE_LOG.md` lines | Business logic |
 | Auditor | Gemini Flash (Antigravity) | At milestones, compares the whole repo to SPEC §6 / §9 and lists gaps | Change code |
 
