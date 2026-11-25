@@ -419,5 +419,5 @@ There is no endpoint that edits or deletes audit rows, and the DB trigger refuse
 | `operator/Incidents` | `/ops/incidents` (create, list, detail, start-maintenance, resolve) |
 | `operator/ChargingQueue` | `GET /ops/charging/queue`, `GET /ops/charging/schedule`, weights GET/PUT/reset, dispatch, override |
 | `operator/Redistribution` | `/ops/redistribution/*` |
-| `operator/Simulation` | `/ops/simulation/*` |
+| `simulation/*` (`/sim/*`, D-24) | `/ops/simulation/*` |
 | Demo controls (operator) | `/ops/telemetry/demo/*`, `GET /ops/telemetry/rejects` |
