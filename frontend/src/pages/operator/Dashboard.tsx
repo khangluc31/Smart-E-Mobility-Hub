@@ -16,6 +16,7 @@ import { useOpsDashboard, useOpsHubDetail } from '@/hooks/useMonitoring';
 import { NEAR_CAPACITY_PCT } from '@/lib/constants';
 import { StatusBadge } from '@/components/common/StatusBadge';
 import { BatteryBar } from '@/components/common/BatteryBar';
+import { CampusMap } from '@/components/common/CampusMap';
 import { ErrorBox } from '@/components/common/ErrorBox';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -571,6 +572,26 @@ export function Dashboard() {
           </div>
 
           <Separator />
+
+          <CampusMap
+            hubs={data.hubs.map((hub) => ({
+              id: hub.hubId,
+              name: hub.name,
+              degraded: hub.degraded,
+              nearCapacity:
+                hub.parkingUtilPct.MOTORCYCLE >= NEAR_CAPACITY_PCT ||
+                hub.parkingUtilPct.CAR >= NEAR_CAPACITY_PCT ||
+                hub.chargingUtilPct.MOTORCYCLE >= NEAR_CAPACITY_PCT ||
+                hub.chargingUtilPct.CAR >= NEAR_CAPACITY_PCT,
+              availableVehicles:
+                hub.availableRentalVehicles.MOTORCYCLE + hub.availableRentalVehicles.CAR,
+              openAlerts: hub.openAlerts,
+            }))}
+            selectedHubId={selectedHubId}
+            onSelectHub={setSelectedHubId}
+            title="Network Hub Map"
+            subtitle="Select any Hub pin to open the live resource drill-down."
+          />
 
           <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
             {data.hubs.map((hub) => (

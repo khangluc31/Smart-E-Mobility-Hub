@@ -12,6 +12,7 @@ import {
 } from '@/types/enums';
 import { StatusBadge } from '@/components/common/StatusBadge';
 import { BatteryBar } from '@/components/common/BatteryBar';
+import { VehicleIcon } from '@/components/common/VehicleIcon';
 import { ErrorBox } from '@/components/common/ErrorBox';
 import { HubStatusChips, formatRelativeTime } from '@/components/common/HubStatusChips';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -113,7 +114,10 @@ export function HubDetail() {
                   const chg = hub.charging[vc];
                   return (
                     <div key={vc} className="rounded-md border p-2.5 space-y-1">
-                      <p className="font-semibold">{CLASS_LABEL[vc]}</p>
+                      <p className="font-semibold flex items-center gap-1.5">
+                        <VehicleIcon type={vc} size="sm" className="text-muted-foreground" />
+                        <span>{CLASS_LABEL[vc]}</span>
+                      </p>
                       <p className="tabular-nums">
                         Parking (all): <strong>{allP.free}</strong>/{allP.total} free (
                         {allP.utilPct}% util)
@@ -150,6 +154,7 @@ export function HubDetail() {
                       className="py-2.5 flex flex-wrap items-center justify-between gap-2 text-xs"
                     >
                       <div className="flex items-center gap-2 min-w-0">
+                        <VehicleIcon type={v.type} size="md" className="text-muted-foreground" />
                         <span className="font-mono font-semibold">{v.id}</span>
                         <span className="text-muted-foreground">{VEHICLE_TYPE_LABEL[v.type]}</span>
                       </div>
@@ -194,8 +199,11 @@ export function HubDetail() {
                       );
                       return (
                         <div key={`${pool}-${vc}`} className="rounded-md border p-2.5 space-y-2">
-                          <p className="text-xs font-medium">
-                            {CLASS_LABEL[vc]} ({spaces.length})
+                          <p className="text-xs font-medium flex items-center gap-1.5">
+                            <VehicleIcon type={vc} size="sm" className="text-muted-foreground" />
+                            <span>
+                              {CLASS_LABEL[vc]} ({spaces.length})
+                            </span>
                           </p>
                           {spaces.length === 0 ? (
                             <p className="text-xs text-muted-foreground">None</p>
@@ -234,8 +242,11 @@ export function HubDetail() {
                   const points = hub.chargingPoints.filter((p) => p.vehicleClass === vc);
                   return (
                     <div key={vc} className="rounded-md border p-2.5 space-y-2">
-                      <p className="text-xs font-medium">
-                        {CLASS_LABEL[vc]} ({points.length})
+                      <p className="text-xs font-medium flex items-center gap-1.5">
+                        <VehicleIcon type={vc} size="sm" className="text-muted-foreground" />
+                        <span>
+                          {CLASS_LABEL[vc]} ({points.length})
+                        </span>
                       </p>
                       {points.length === 0 ? (
                         <p className="text-xs text-muted-foreground">None</p>

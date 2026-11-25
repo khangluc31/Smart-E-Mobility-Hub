@@ -17,6 +17,7 @@ import type { Alternative } from '@/types/common';
 import type { RentalVehicle } from '@/types/hubs';
 import { StatusBadge } from '@/components/common/StatusBadge';
 import { BatteryBar } from '@/components/common/BatteryBar';
+import { VehicleIcon } from '@/components/common/VehicleIcon';
 import { ErrorBox } from '@/components/common/ErrorBox';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -327,7 +328,10 @@ export function VehicleSearch() {
                     >
                       <div className="space-y-1.5">
                         <div className="flex flex-wrap items-center justify-between gap-2">
-                          <span className="font-mono font-semibold text-sm">{v.id}</span>
+                          <div className="flex items-center gap-2 min-w-0">
+                            <VehicleIcon type={v.type} size="md" className="text-muted-foreground" />
+                            <span className="font-mono font-semibold text-sm">{v.id}</span>
+                          </div>
                           <StatusBadge kind="rentalVehicle" value={v.status} />
                         </div>
                         <p className="text-muted-foreground">
@@ -449,7 +453,10 @@ export function VehicleSearch() {
                   <Card key={v.id} className="flex flex-col justify-between">
                     <CardHeader className="pb-2 space-y-1.5">
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <CardTitle className="font-mono text-sm">{v.id}</CardTitle>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <VehicleIcon type={v.type} size="md" className="text-muted-foreground" />
+                          <CardTitle className="font-mono text-sm">{v.id}</CardTitle>
+                        </div>
                         <div className="flex flex-wrap items-center gap-1.5">
                           <StatusBadge kind="rentalVehicle" value={v.status} />
                           {v.charging && (
