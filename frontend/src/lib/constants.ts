@@ -14,3 +14,6 @@ export const STALLED_FEED_INTERVALS = 3;
 // SPEC §3: maximum parking reservation window in hours (client-side hint only; server decides).
 export const PARKING_MAX_WINDOW_H = 12;
 
+// SPEC §3 / D-13: minutes after returning a rental vehicle during which the student may queue it for charging.
+export const CHARGE_AFTER_RETURN_MIN = 30;
+
