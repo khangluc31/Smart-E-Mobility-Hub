@@ -8,6 +8,7 @@ import { authRouter } from './modules/auth/auth.routes';
 import { chargingOpsRouter, chargingRouter } from './modules/charging/charging.routes';
 import { hubsRouter } from './modules/hubs/hubs.routes';
 import { incidentsOpsRouter, reportFaultRouter } from './modules/incidents/incidents.routes';
+import { monitoringOpsRouter } from './modules/monitoring/monitoring.routes';
 import { notificationsRouter } from './modules/notifications/notifications.routes';
 import { privateEvsRouter } from './modules/private-evs/privateEvs.routes';
 import {
@@ -67,6 +68,7 @@ export function createApp(opts?: { corsOrigins?: readonly string[] }) {
   ops.use('/telemetry', telemetryOpsRouter);
   ops.use('/charging', chargingOpsRouter);
   ops.use('/incidents', incidentsOpsRouter);
+  ops.use(monitoringOpsRouter);
   api.use('/auth', authRouter);
   api.use('/hubs', requireAuth, hubsRouter);
   api.use('/notifications', requireAuth, notificationsRouter);
