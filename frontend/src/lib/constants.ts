@@ -23,4 +23,15 @@ export const NEAR_CAPACITY_PCT = 85;
 // CONTRACTS §10 / §11: maximum character length for operator alert/incident notes and resolution notes.
 export const OPERATOR_NOTES_MAX = 1000;
 
+// SPEC §3 / FR-52: minimum reason length for an operator charging queue override.
+export const OVERRIDE_REASON_MIN_CHARS = 10;
+
+// CONTRACTS §14: allowed duration range (seconds) for telemetry demo stall.
+export const DEMO_STALL_MIN_SEC = 1;
+export const DEMO_STALL_MAX_SEC = 600;
+
+// CONTRACTS §8.2: default target battery percentage for fleet charging dispatch.
+export const FULL_CHARGE_PCT = 100;
+
+
 
