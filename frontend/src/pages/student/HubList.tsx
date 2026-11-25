@@ -1,11 +1,13 @@
 // Student Hub list page (FR-01, FR-03, D-01 5s poll, NFR-28 360px).
 // Reference example of page -> hook -> api.ts -> typed DTO.
 
-import { Link } from 'react-router-dom';
-import { Bike, Car, MapPin, Zap } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { MapPin, Zap } from 'lucide-react';
 import { useHubs } from '@/hooks/useHubs';
 import { VEHICLE_CLASSES, type VehicleClass } from '@/types/enums';
 import type { HubSummary } from '@/types/hubs';
+import { CampusMap } from '@/components/common/CampusMap';
+import { VehicleIcon } from '@/components/common/VehicleIcon';
 import { HubStatusChips } from '@/components/common/HubStatusChips';
 import { ErrorBox } from '@/components/common/ErrorBox';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -17,14 +19,6 @@ const CLASS_LABEL: Record<VehicleClass, string> = {
   MOTORCYCLE: 'Motorcycle',
   CAR: 'Car',
 };
-
-function ClassIcon({ vehicleClass }: { vehicleClass: VehicleClass }) {
-  return vehicleClass === 'MOTORCYCLE' ? (
-    <Bike className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-  ) : (
-    <Car className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-  );
-}
 
 function HubCard({ hub, hubNamesById }: { hub: HubSummary; hubNamesById: Map<string, string> }) {
   const redirectName = hub.redirectToHubId
@@ -84,7 +78,7 @@ function HubCard({ hub, hubNamesById }: { hub: HubSummary; hubNamesById: Map<str
                 className="flex flex-wrap items-center justify-between gap-1 rounded border px-2 py-1.5"
               >
                 <div className="flex items-center gap-1.5 font-medium">
-                  <ClassIcon vehicleClass={vc} />
+                  <VehicleIcon type={vc} size="sm" className="text-muted-foreground" />
                   <span>{CLASS_LABEL[vc]}</span>
                 </div>
                 <div className="text-right tabular-nums space-x-2">
@@ -114,7 +108,7 @@ function HubCard({ hub, hubNamesById }: { hub: HubSummary; hubNamesById: Map<str
                 className="flex flex-wrap items-center justify-between gap-1 rounded border px-2 py-1.5"
               >
                 <div className="flex items-center gap-1.5 font-medium">
-                  <ClassIcon vehicleClass={vc} />
+                  <VehicleIcon type={vc} size="sm" className="text-muted-foreground" />
                   <span>{CLASS_LABEL[vc]}</span>
                 </div>
                 <div className="tabular-nums">
@@ -130,6 +124,7 @@ function HubCard({ hub, hubNamesById }: { hub: HubSummary; hubNamesById: Map<str
 }
 
 export function HubList() {
+  const navigate = useNavigate();
   const { data: hubs, isLoading, error } = useHubs();
 
   const hubNamesById = new Map<string, string>();
@@ -177,11 +172,25 @@ export function HubList() {
       )}
 
       {!isLoading && hubs && hubs.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {hubs.map((hub) => (
-            <HubCard key={hub.id} hub={hub} hubNamesById={hubNamesById} />
-          ))}
-        </div>
+        <>
+          <CampusMap
+            hubs={hubs.map((hub) => ({
+              id: hub.id,
+              name: hub.name,
+              degraded: hub.degraded,
+              nearCapacity: hub.nearCapacity,
+              availableVehicles: hub.availableRentalVehicles,
+              redirectToHubId: hub.redirectToHubId,
+            }))}
+            onSelectHub={(id) => navigate(`/app/hubs/${id}`)}
+          />
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {hubs.map((hub) => (
+              <HubCard key={hub.id} hub={hub} hubNamesById={hubNamesById} />
+            ))}
+          </div>
+        </>
       )}
     </div>
   );

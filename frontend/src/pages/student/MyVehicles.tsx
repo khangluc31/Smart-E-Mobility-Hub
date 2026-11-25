@@ -17,6 +17,7 @@ import type { Alternative } from '@/types/common';
 import { PRIVATE_EV_TYPES, type PrivateEvType, type VehicleClass } from '@/types/enums';
 import type { CombinedBookingResult, PrivateEv } from '@/types/privateEvs';
 import { BatteryBar } from '@/components/common/BatteryBar';
+import { VehicleIcon } from '@/components/common/VehicleIcon';
 import { ErrorBox } from '@/components/common/ErrorBox';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -383,7 +384,10 @@ export function MyVehicles() {
               <Card key={ev.id} className="flex flex-col justify-between">
                 <CardHeader className="pb-2 space-y-1.5">
                   <div className="flex flex-wrap items-center justify-between gap-2">
-                    <CardTitle className="text-base">{ev.label}</CardTitle>
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <VehicleIcon type={ev.type} size="lg" className="text-muted-foreground" />
+                      <CardTitle className="text-base truncate">{ev.label}</CardTitle>
+                    </div>
                     <div className="flex flex-wrap items-center gap-1.5">
                       <Badge variant="secondary">{CLASS_LABEL[ev.vehicleClass]}</Badge>
                       {ev.hasActiveBooking && (
@@ -598,6 +602,11 @@ export function MyVehicles() {
             {combinedTarget && (
               <DialogDescription asChild>
                 <div className="flex flex-wrap items-center gap-2 pt-1 text-xs text-muted-foreground">
+                  <VehicleIcon
+                    type={combinedTarget.type}
+                    size="md"
+                    className="text-muted-foreground"
+                  />
                   <span className="font-medium text-foreground">{combinedTarget.label}</span>
                   <Badge variant="secondary">{CLASS_LABEL[combinedTarget.vehicleClass]}</Badge>
                   <BatteryBar pct={combinedTarget.batteryPct} />
