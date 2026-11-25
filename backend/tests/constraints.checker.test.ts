@@ -940,17 +940,42 @@ describe('T-02 AC-7 uq_alert_open one OPEN alert per dedupeKey', () => {
     );
   });
 
-  it('T-02 AC-7 non-OPEN alert with same dedupeKey is allowed', async () => {
+  it('T-02 AC-7 ACKNOWLEDGED + OPEN with same dedupeKey is rejected, RESOLVED/DISMISSED + OPEN is allowed', async () => {
     await db.$executeRaw`
       INSERT INTO alert
         (id, type, "hubId", "resourceIds", metric, message, "dedupeKey", status, "createdAt", "lastSeenAt")
       VALUES ('a1', 'NEAR_CAPACITY', 'h1', '{}', '{}', 'msg', 'NEAR:h1:PARKING:MOTORCYCLE', 'ACKNOWLEDGED', NOW(), NOW())`;
 
-    await expect(
+    await expectViolation(
       db.$executeRaw`
         INSERT INTO alert
           (id, type, "hubId", "resourceIds", metric, message, "dedupeKey", status, "createdAt", "lastSeenAt")
         VALUES ('a2', 'NEAR_CAPACITY', 'h1', '{}', '{}', 'msg', 'NEAR:h1:PARKING:MOTORCYCLE', 'OPEN', NOW(), NOW())`,
+      '23505',
+    );
+
+    await db.$executeRaw`
+      INSERT INTO alert
+        (id, type, "hubId", "resourceIds", metric, message, "dedupeKey", status, "createdAt", "lastSeenAt")
+      VALUES ('a3', 'NEAR_CAPACITY', 'h1', '{}', '{}', 'msg', 'NEAR:h1:PARKING:CAR', 'RESOLVED', NOW(), NOW())`;
+
+    await expect(
+      db.$executeRaw`
+        INSERT INTO alert
+          (id, type, "hubId", "resourceIds", metric, message, "dedupeKey", status, "createdAt", "lastSeenAt")
+        VALUES ('a4', 'NEAR_CAPACITY', 'h1', '{}', '{}', 'msg', 'NEAR:h1:PARKING:CAR', 'OPEN', NOW(), NOW())`,
+    ).resolves.not.toThrow();
+
+    await db.$executeRaw`
+      INSERT INTO alert
+        (id, type, "hubId", "resourceIds", metric, message, "dedupeKey", status, "createdAt", "lastSeenAt")
+      VALUES ('a5', 'NEAR_CAPACITY', 'h1', '{}', '{}', 'msg', 'NEAR:h1:CHARGING:MOTORCYCLE', 'DISMISSED', NOW(), NOW())`;
+
+    await expect(
+      db.$executeRaw`
+        INSERT INTO alert
+          (id, type, "hubId", "resourceIds", metric, message, "dedupeKey", status, "createdAt", "lastSeenAt")
+        VALUES ('a6', 'NEAR_CAPACITY', 'h1', '{}', '{}', 'msg', 'NEAR:h1:CHARGING:MOTORCYCLE', 'OPEN', NOW(), NOW())`,
     ).resolves.not.toThrow();
   });
 });
