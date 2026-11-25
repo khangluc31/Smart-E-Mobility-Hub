@@ -21,6 +21,8 @@ import { MyVehicles } from '@/pages/student/MyVehicles';
 import { Dashboard } from '@/pages/operator/Dashboard';
 import { Alerts } from '@/pages/operator/Alerts';
 import { Incidents } from '@/pages/operator/Incidents';
+import { ChargingQueue } from '@/pages/operator/ChargingQueue';
+import { DemoControls } from '@/pages/operator/DemoControls';
 import { Skeleton } from '@/components/ui/skeleton';
 
 function HomeRedirect() {
@@ -67,16 +69,7 @@ export function App() {
             <Route index element={<Dashboard />} />
             <Route path="alerts" element={<Alerts />} />
             <Route path="incidents" element={<Incidents />} />
-            <Route
-              path="charging"
-              element={
-                <TodoPage
-                  title="Charging Queue & Schedule"
-                  area="priority charging & overrides"
-                  owner="M6"
-                />
-              }
-            />
+            <Route path="charging" element={<ChargingQueue />} />
             <Route
               path="redistribution"
               element={
@@ -97,16 +90,7 @@ export function App() {
                 />
               }
             />
-            <Route
-              path="demo"
-              element={
-                <TodoPage
-                  title="Telemetry Demo Controls"
-                  area="simulated sensor feed & fault injection"
-                  owner="M1"
-                />
-              }
-            />
+            <Route path="demo" element={<DemoControls />} />
           </Route>
         </Route>
       </Route>
