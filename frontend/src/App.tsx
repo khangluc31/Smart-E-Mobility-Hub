@@ -18,6 +18,9 @@ import { MyReservations } from '@/pages/student/MyReservations';
 import { ParkingBooking } from '@/pages/student/ParkingBooking';
 import { Charging } from '@/pages/student/Charging';
 import { MyVehicles } from '@/pages/student/MyVehicles';
+import { Dashboard } from '@/pages/operator/Dashboard';
+import { Alerts } from '@/pages/operator/Alerts';
+import { Incidents } from '@/pages/operator/Incidents';
 import { Skeleton } from '@/components/ui/skeleton';
 
 function HomeRedirect() {
@@ -61,36 +64,9 @@ export function App() {
       <Route path="/ops" element={<RequireAuth />}>
         <Route element={<RequireRole role="OPERATOR" />}>
           <Route element={<OperatorLayout />}>
-            <Route
-              index
-              element={
-                <TodoPage
-                  title="Operator Dashboard"
-                  area="network monitoring & Hub drill-down"
-                  owner="M6"
-                />
-              }
-            />
-            <Route
-              path="alerts"
-              element={
-                <TodoPage
-                  title="Operational Alerts"
-                  area="monitoring & alerts"
-                  owner="M6"
-                />
-              }
-            />
-            <Route
-              path="incidents"
-              element={
-                <TodoPage
-                  title="Incidents & Maintenance"
-                  area="incident lifecycle & recovery"
-                  owner="M6"
-                />
-              }
-            />
+            <Route index element={<Dashboard />} />
+            <Route path="alerts" element={<Alerts />} />
+            <Route path="incidents" element={<Incidents />} />
             <Route
               path="charging"
               element={
