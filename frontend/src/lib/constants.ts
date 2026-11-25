@@ -17,3 +17,10 @@ export const PARKING_MAX_WINDOW_H = 12;
 // SPEC §3 / D-13: minutes after returning a rental vehicle during which the student may queue it for charging.
 export const CHARGE_AFTER_RETURN_MIN = 30;
 
+// SPEC §3 / BR-09: utilisation threshold (%) at or above which a Hub is highlighted near capacity.
+export const NEAR_CAPACITY_PCT = 85;
+
+// CONTRACTS §10 / §11: maximum character length for operator alert/incident notes and resolution notes.
+export const OPERATOR_NOTES_MAX = 1000;
+
+
