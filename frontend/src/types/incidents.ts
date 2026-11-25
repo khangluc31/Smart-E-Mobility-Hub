@@ -46,3 +46,21 @@ export interface StudentReportFaultResult {
   incidentId: string;
   linkedToExisting: boolean;
 }
+
+export interface IncidentReportView {
+  source: IncidentSource;
+  reportedById: string | null;
+  notes: string;
+  createdAt: string;
+}
+
+export interface IncidentDetail {
+  incident: Incident;
+  reports: IncidentReportView[];
+  impacts: IncidentImpact[];
+}
+
+export interface IncidentList {
+  items: Incident[];
+  nextCursor: string | null;
+}

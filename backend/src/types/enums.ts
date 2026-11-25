@@ -173,6 +173,8 @@ export const AUDIT_ACTIONS = [
   'CHARGING_DISPATCHED',
   'CHARGING_OVERRIDE',
   'INCIDENT_CREATED',
+  'INCIDENT_MAINTENANCE_STARTED',
+  'INCIDENT_RESOLVED',
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 
