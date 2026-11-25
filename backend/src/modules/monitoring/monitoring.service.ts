@@ -26,16 +26,19 @@ import type {
 } from '../../types/monitoring';
 import { isDegraded, roundTo1, utilPct } from '../hubs/hubs.metrics';
 import { getHub, listHubs } from '../hubs/hubs.service';
+import { detectImbalance } from '../redistribution/redistribution.service';
 
 export const ALERT_NOTE_MAX = 1000;
 export const SUPPRESSED_SETTING_PREFIX = 'monitoring.suppressed:';
 
-const EVALUATED_ALERT_TYPES: readonly AlertType[] = [
+const BASE_EVALUATED_ALERT_TYPES: readonly AlertType[] = [
   'NEAR_CAPACITY',
   'LOW_BATTERY',
   'FAULT',
   'STALLED_FEED',
 ];
+
+const IMBALANCE_ALERT_TYPES: readonly AlertType[] = ['SHORTAGE', 'SURPLUS'];
 
 export interface MonitoringActor {
   id: string;
@@ -320,6 +323,18 @@ export async function evaluateHub(hubId: string, now: Date = new Date()): Promis
     return;
   }
 
+  const hubDegraded = isDegraded(
+    hub.lastTelemetryAt,
+    now,
+    config.STALLED_FEED_INTERVALS,
+    config.TELEMETRY_INTERVAL_SEC,
+  );
+
+  // UC-24 E1: When degraded, suspend SHORTAGE/SURPLUS evaluation and leave existing ones untouched.
+  const activeAlertTypes: AlertType[] = hubDegraded
+    ? [...BASE_EVALUATED_ALERT_TYPES]
+    : [...BASE_EVALUATED_ALERT_TYPES, ...IMBALANCE_ALERT_TYPES];
+
   const [spaces, points, vehicles, openIncidents, activeAlerts, suppressedSettings] =
     await Promise.all([
       db.parkingSpace.findMany({
@@ -351,7 +366,7 @@ export async function evaluateHub(hubId: string, now: Date = new Date()): Promis
         where: {
           hubId,
           status: { in: ['OPEN', 'ACKNOWLEDGED'] },
-          type: { in: [...EVALUATED_ALERT_TYPES] },
+          type: { in: activeAlertTypes },
         },
       }),
       db.setting.findMany({
@@ -484,14 +499,7 @@ export async function evaluateHub(hubId: string, now: Date = new Date()): Promis
   }
 
   // 4. STALLED_FEED (FR-35): degraded telemetry feed
-  if (
-    isDegraded(
-      hub.lastTelemetryAt,
-      now,
-      config.STALLED_FEED_INTERVALS,
-      config.TELEMETRY_INTERVAL_SEC,
-    )
-  ) {
+  if (hubDegraded) {
     const thresholdSec = config.STALLED_FEED_INTERVALS * config.TELEMETRY_INTERVAL_SEC;
     const stalledSec =
       hub.lastTelemetryAt === null
@@ -510,9 +518,31 @@ export async function evaluateHub(hubId: string, now: Date = new Date()): Promis
           : `${hub.name} telemetry feed stalled for ${stalledSec}s (threshold ${thresholdSec}s).`,
       dedupeKey,
     });
+  } else {
+    // 5. SHORTAGE / SURPLUS (FR-43, BR-15; suspended when DEGRADED per UC-24 E1)
+    const imbalances = await detectImbalance(hubId, now);
+    for (const imb of imbalances) {
+      if (imb.state !== 'SHORTAGE' && imb.state !== 'SURPLUS') continue;
+      const dedupeKey = `${imb.state}:${hubId}:${imb.vehicleClass}`;
+      desiredByKey.set(dedupeKey, {
+        type: imb.state,
+        hubId,
+        vehicleClass: imb.vehicleClass,
+        resourceIds: [],
+        metric: {
+          available: imb.available,
+          min: imb.min,
+          max: imb.max,
+          amount: imb.amount,
+        },
+        message:
+          imb.state === 'SHORTAGE'
+            ? `${hub.name} ${imb.vehicleClass} vehicle shortage: ${imb.available} available (min ${imb.min}, deficit ${imb.amount}).`
+            : `${hub.name} ${imb.vehicleClass} vehicle surplus: ${imb.available} available (max ${imb.max}, excess ${imb.amount}).`,
+        dedupeKey,
+      });
+    }
   }
-
-  // TODO(M2): evaluate SHORTAGE/SURPLUS via redistribution.detectImbalance(hubId) (FR-43; skip when degraded)
 
   // Build active and suppressed maps
   const activeByKey = new Map<string, PrismaAlert>();
@@ -614,8 +644,17 @@ export async function evaluateHub(hubId: string, now: Date = new Date()): Promis
   }
 
   // Sync step 3: clear DISMISSED suppression keys for this Hub whose condition has cleared
+  // (while degraded, keep SHORTAGE:/SURPLUS: suppression keys untouched per UC-24 E1)
   const keysToDelete = hubSuppressedSettingKeys
-    .filter((entry) => !desiredByKey.has(entry.dedupeKey))
+    .filter((entry) => {
+      if (
+        hubDegraded &&
+        (entry.dedupeKey.startsWith('SHORTAGE:') || entry.dedupeKey.startsWith('SURPLUS:'))
+      ) {
+        return false;
+      }
+      return !desiredByKey.has(entry.dedupeKey);
+    })
     .map((entry) => entry.settingKey);
   if (keysToDelete.length > 0) {
     await db.setting.deleteMany({
