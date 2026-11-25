@@ -628,7 +628,7 @@ export async function takeSnapshot(): Promise<Snapshot> {
 
 ## 13. Frontend (M1 shell, M5 student pages, M6 operator pages)
 
-- **Routes (`App.tsx`):** `/login`, `/register`; `/app/*` (StudentLayout: hubs, hub detail, vehicles, reservations, parking, charging, my-vehicles); `/ops/*` inside `RequireRole role="OPERATOR"` (dashboard with Hub drill-down drawer, alerts, incidents, charging queue, redistribution, simulation).
+- **Routes (`App.tsx`):** `/login`, `/register`; `/app/*` (StudentLayout: hubs, hub detail, vehicles, reservations, parking, charging, my-vehicles); `/ops/*` inside `RequireRole role="OPERATOR"` (dashboard with Hub drill-down drawer, alerts, incidents, charging queue, redistribution, demo controls; /ops/simulation redirects to /sim); `/sim/*` inside `RequireRole role="OPERATOR"` (`SimulationLayout`: scenarios, runs, compare, recommendations — separate sandbox workspace with Operations ↔ Simulation switch, D-24).
 - **Data:** one hook file per module (`hooks/useX.ts`) wrapping TanStack Query. Live views use `refetchInterval: 5000` (D-01); mutations invalidate the related queries.
 - **`lib/api.ts`:** base URL from `VITE_API_URL`, adds the Bearer token, throws `ApiError {status, code, message, nextActions, alternatives}`; on 401 → logout.
 - **Consistent labels (NFR-04):** `components/common/StatusBadge.tsx` holds the only map from each enum value to label + colour; `BatteryBar` shows < 20% in red everywhere.
