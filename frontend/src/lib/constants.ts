@@ -36,6 +36,12 @@ export const FULL_CHARGE_PCT = 100;
 // SPEC §3 / BR-08: destination FLEET occupancy limit (%) above which redistribution requires override + reason.
 export const REDISTRIBUTION_DEST_LIMIT_PCT = 85;
 
+// SPEC §3 / FR-55: maximum simulation horizon in simulated hours.
+export const SIM_MAX_HORIZON_H = 24;
+
+// SPEC §3 / FR-56: simulation reporting interval in simulated minutes.
+export const SIM_INTERVAL_MIN = 15;
+
 
 
 

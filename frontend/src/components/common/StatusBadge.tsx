@@ -1,5 +1,5 @@
 // Single source of truth mapping enum status values to human labels and colours (NFR-04, AGENTS §5).
-// Imports all 9 enum value arrays from types/enums.ts and uses Record<Enum, StatusMeta> so any
+// Imports all 10 enum value arrays from types/enums.ts and uses Record<Enum, StatusMeta> so any
 // missing enum member is a compile-time error.
 
 import {
@@ -12,6 +12,7 @@ import {
   ALERT_STATUSES,
   REDISTRIBUTION_STATUSES,
   SIM_RUN_STATUSES,
+  RECOMMENDATION_STATUSES,
   type RentalVehicleStatus,
   type ParkingSpaceStatus,
   type ChargingPointStatus,
@@ -21,6 +22,7 @@ import {
   type AlertStatus,
   type RedistributionStatus,
   type SimRunStatus,
+  type RecommendationStatus,
 } from '@/types/enums';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
@@ -107,6 +109,13 @@ const SIM_RUN_MAP: Record<SimRunStatus, StatusMeta> = {
   INCOMPLETE: { label: 'Incomplete', tone: 'amber' },
 };
 
+const RECOMMENDATION_MAP: Record<RecommendationStatus, StatusMeta> = {
+  PENDING: { label: 'Pending', tone: 'amber' },
+  APPLIED: { label: 'Applied', tone: 'green' },
+  DISMISSED: { label: 'Dismissed', tone: 'grey' },
+  BLOCKED: { label: 'Blocked', tone: 'red' },
+};
+
 // Runtime reference to imported enum arrays so bundlers/linters verify every member exists.
 const STATUS_ENUM_SETS = {
   rentalVehicle: RENTAL_VEHICLE_STATUSES,
@@ -118,6 +127,7 @@ const STATUS_ENUM_SETS = {
   alert: ALERT_STATUSES,
   redistribution: REDISTRIBUTION_STATUSES,
   simRun: SIM_RUN_STATUSES,
+  recommendation: RECOMMENDATION_STATUSES,
 } as const;
 void STATUS_ENUM_SETS;
 
@@ -130,7 +140,8 @@ export type StatusBadgeProps =
   | { kind: 'incident'; value: IncidentStatus; className?: string }
   | { kind: 'alert'; value: AlertStatus; className?: string }
   | { kind: 'redistribution'; value: RedistributionStatus; className?: string }
-  | { kind: 'simRun'; value: SimRunStatus; className?: string };
+  | { kind: 'simRun'; value: SimRunStatus; className?: string }
+  | { kind: 'recommendation'; value: RecommendationStatus; className?: string };
 
 function resolveMeta(props: StatusBadgeProps): StatusMeta {
   switch (props.kind) {
@@ -152,6 +163,8 @@ function resolveMeta(props: StatusBadgeProps): StatusMeta {
       return REDISTRIBUTION_MAP[props.value];
     case 'simRun':
       return SIM_RUN_MAP[props.value];
+    case 'recommendation':
+      return RECOMMENDATION_MAP[props.value];
   }
 }
 
