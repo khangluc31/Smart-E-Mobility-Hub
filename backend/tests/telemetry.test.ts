@@ -341,9 +341,9 @@ describe('T-06 Telemetry: validation, ingestion, generator, demo endpoints', () 
   });
 
   // ---------------------------------------------------------------------------
-  // AC-6: D-17 no status column changed even when faultCodes and <20% battery arrive
+  // AC-6: D-17 no status column changed by physical telemetry; FR-36 faultCodes trigger afterCommit incidents
   // ---------------------------------------------------------------------------
-  it('D-17 AC-6 does not change any status column on vehicles, spaces, points or requests and returns faults in IngestResult', async () => {
+  it('D-17 AC-6 keeps status unchanged for low-battery telemetry without faults, and triggers FR-36 TELEMETRY incidents for faultCodes', async () => {
     const before = await snapshotLiveState();
     const futureTs = new Date(Date.now() + 30_000).toISOString();
 
@@ -352,8 +352,9 @@ describe('T-06 Telemetry: validation, ingestion, generator, demo endpoints', () 
       timestamp: futureTs,
       source: 'SIMULATOR',
       vehicles: [
-        // Drop AVAILABLE vehicle to 5% and include faultCode: status must stay AVAILABLE (D-17)
-        { id: 'RV-M-001', batteryPct: 5, faultCode: 'BAT_OVERHEAT' },
+        // Drop AVAILABLE vehicle to 5% with no faultCode: status must stay AVAILABLE (D-17)
+        { id: 'RV-M-002', batteryPct: 5 },
+        { id: 'RV-M-001', batteryPct: 50, faultCode: 'BAT_OVERHEAT' },
       ],
       parkingSpaces: [{ id: 'MET-P-M-01', faultCode: 'SENSOR_BLOCKED' }],
       chargingPoints: [{ id: 'MET-CP-M-01', faultCode: 'RELAY_TRIP' }],
@@ -366,18 +367,41 @@ describe('T-06 Telemetry: validation, ingestion, generator, demo endpoints', () 
     ]);
 
     const after = await snapshotLiveState();
+    // D-17: low battery without fault changes batteryPct only, never status
+    expect(after.vehicles.find((v) => v.id === 'RV-M-002')?.status).toBe('AVAILABLE');
+    expect(after.vehicles.find((v) => v.id === 'RV-M-002')?.batteryPct).toBe(5);
+    // FR-36 (ARCHITECTURE §7.3 step 4): afterCommit creates TELEMETRY incidents and withdraws faulted resources
     expect(after.vehicles.map((v) => ({ id: v.id, status: v.status }))).toEqual(
-      before.vehicles.map((v) => ({ id: v.id, status: v.status })),
+      before.vehicles.map((v) => ({
+        id: v.id,
+        status: v.id === 'RV-M-001' ? 'FAULTY' : v.status,
+      })),
     );
     expect(after.spaces.map((s) => ({ id: s.id, status: s.status }))).toEqual(
-      before.spaces.map((s) => ({ id: s.id, status: s.status })),
+      before.spaces.map((s) => ({
+        id: s.id,
+        status: s.id === 'MET-P-M-01' ? 'UNAVAILABLE' : s.status,
+      })),
     );
     expect(after.points.map((p) => ({ id: p.id, status: p.status }))).toEqual(
-      before.points.map((p) => ({ id: p.id, status: p.status })),
+      before.points.map((p) => ({
+        id: p.id,
+        status: p.id === 'MET-CP-M-01' ? 'FAULTY' : p.status,
+      })),
     );
     expect(after.requests.map((r) => ({ id: r.id, status: r.status }))).toEqual(
       before.requests.map((r) => ({ id: r.id, status: r.status })),
     );
+
+    const incidents = await db.incident.findMany({
+      where: { source: 'TELEMETRY' },
+      orderBy: { resourceId: 'asc' },
+    });
+    expect(incidents.map((i) => ({ resourceId: i.resourceId, status: i.status }))).toEqual([
+      { resourceId: 'MET-CP-M-01', status: 'REPORTED' },
+      { resourceId: 'MET-P-M-01', status: 'REPORTED' },
+      { resourceId: 'RV-M-001', status: 'REPORTED' },
+    ]);
   });
 
   // ---------------------------------------------------------------------------
