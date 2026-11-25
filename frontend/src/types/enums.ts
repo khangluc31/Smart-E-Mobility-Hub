@@ -175,6 +175,8 @@ export const AUDIT_ACTIONS = [
   'INCIDENT_CREATED',
   'INCIDENT_MAINTENANCE_STARTED',
   'INCIDENT_RESOLVED',
+  'ALERT_ACKNOWLEDGED',
+  'ALERT_DISMISSED',
 ] as const;
 export type AuditAction = (typeof AUDIT_ACTIONS)[number];
 

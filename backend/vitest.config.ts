@@ -24,6 +24,7 @@ export default defineConfig({
         'src/modules/charging/**': { lines: 70 },
         'src/modules/hubs/**': { lines: 70 },
         'src/modules/incidents/**': { lines: 70 },
+        'src/modules/monitoring/**': { lines: 70 },
         'src/modules/notifications/**': { lines: 70 },
         'src/modules/private-evs/**': { lines: 70 },
         'src/modules/reservations/**': { lines: 70 },

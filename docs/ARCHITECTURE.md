@@ -313,8 +313,8 @@ CREATE UNIQUE INDEX uq_charge_active_pev ON charging_request ("privateEvId")
 CREATE UNIQUE INDEX uq_incident_open ON incident ("resourceType","resourceId")
   WHERE status <> 'RESOLVED';
 
--- UC-20 E2: one open alert per condition
-CREATE UNIQUE INDEX uq_alert_open ON alert ("dedupeKey") WHERE status = 'OPEN';
+-- UC-20 E2: one active alert (OPEN or ACKNOWLEDGED) per condition
+CREATE UNIQUE INDEX uq_alert_open ON alert ("dedupeKey") WHERE status IN ('OPEN','ACKNOWLEDGED');
 
 -- FR-63/FR-34: audit log is append-only, even for the table owner
 CREATE FUNCTION forbid_change() RETURNS trigger AS $$
@@ -472,7 +472,7 @@ Every 5 s, for each Hub not in "stalled" demo mode, reads current state and prod
 | SHORTAGE / SURPLUS (BR-15) | available moto Rental vehicles < min / > max, computed by `redistribution.service.detectImbalance(hubId)` (M2, FR-43); skipped while Hub is DEGRADED (UC-24 E1) | `SHORTAGE:{hub}:{class}` |
 
 - **Utilisation:** parking = (OCCUPIED + RESERVED) ÷ (all spaces of the class − UNAVAILABLE), both pools; charging = CHARGING ÷ (points of the class − FAULTY). Fewer usable resources → higher utilisation, which is what the Operator needs to see. No resources of the class → 0 %; resources exist but all withdrawn → 100 %. Alerts compare the unrounded ratio; responses round to 1 decimal. One definition, in `hubs/hubs.metrics.ts` (pure); monitoring imports it.
-- **Upsert:** if an OPEN alert with the key exists, update `lastSeenAt` and `metric`; else insert. Condition gone → set RESOLVED (UC-20 A2). Acknowledge/dismiss → status change + `audit()` (FR-34).
+- **Upsert:** if an OPEN or ACKNOWLEDGED alert with the key exists, update `lastSeenAt`, `resourceIds`, `metric` and `message` (keeping its status); if the key was DISMISSED and the condition has not cleared since (tracked in `setting` as `monitoring.suppressed:<dedupeKey>`), skip; else insert OPEN. Condition gone → set active alerts to RESOLVED (UC-20 A2) and clear any suppression key. Acknowledge/dismiss → status change + `audit()` (FR-34).
 - **Hub DEGRADED** is computed (`lastTelemetryAt` older than 3 intervals), not stored; the Hub list and dashboard return `degraded: boolean` and `lastTelemetryAt` (FR-03).
 
 ---

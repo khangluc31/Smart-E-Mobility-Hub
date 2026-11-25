@@ -96,9 +96,9 @@ npm run lint && npm run typecheck   # root, both apps
 
 | Role | Tool | Does | Doesn't |
 |---|---|---|---|
-| Orchestrator | Claude Opus 5.5 (Claude Code) | Writes docs and tickets, reviews at milestones, designs the hard parts | Write production code directly |
-| Writer | Gemini Argon 4 Medium (Antigravity); fallback Neon 4 Medium when out of quota | Implements **one ticket** on its branch, runs lint/typecheck/build/existing tests, writes the ticket's test file on `WRITER-TESTS` tickets, adds its `AI_USAGE_LOG.md` line, writes the PR description | Write the test file on `REQUIRED` tickets; edit files outside the ticket; change docs/schema without saying so |
-| Checker | Sonnet 4.6 Medium (Claude Code, **fresh session**, never the writer's) | **Only on `REQUIRED` tickets:** writes the module's tests **from the ticket and SPEC before reading the code**, runs lint/typecheck/tests/coverage/build, reports PASS/FAIL with the real run log, the ticket's AC table and a bug list | Fix the code itself (it reports; the writer fixes) |
+| Orchestrator | Gemini 4 Neon (Antigravity) | Writes docs and tickets, reviews at milestones, designs the hard parts | Write production code directly |
+| Writer | Gemini 4 Neon Medium (Antigravity) | Implements **one ticket** on its branch, runs lint/typecheck/build/existing tests, writes the ticket's test file on `WRITER-TESTS` tickets, adds its `AI_USAGE_LOG.md` line, writes the PR description | Write the test file on `REQUIRED` tickets; edit files outside the ticket; change docs/schema without saying so |
+| Checker | Claude Sonnet (Claude Code, **fresh session**, never the writer's) | **Only on `REQUIRED` tickets:** writes the module's tests **from the ticket and SPEC before reading the code**, runs lint/typecheck/tests/coverage/build, reports PASS/FAIL with the real run log, the ticket's AC table and a bug list | Fix the code itself (it reports; the writer fixes) |
 | Helper | Haiku 5.5 (Claude Code) | Search the codebase, seed data, boilerplate, `AI_USAGE_LOG.md` lines | Business logic |
 | Auditor | Gemini Flash (Antigravity) | At milestones, compares the whole repo to SPEC §6 / §9 and lists gaps | Change code |
 
