@@ -13,6 +13,7 @@ import { monitoringOpsRouter } from './modules/monitoring/monitoring.routes';
 import { notificationsRouter } from './modules/notifications/notifications.routes';
 import { privateEvsRouter } from './modules/private-evs/privateEvs.routes';
 import { redistributionOpsRouter } from './modules/redistribution/redistribution.routes';
+import { simulationOpsRouter } from './modules/simulation/simulation.routes';
 import {
   meRouter,
   parkingReservationsRouter,
@@ -71,6 +72,7 @@ export function createApp(opts?: { corsOrigins?: readonly string[] }) {
   ops.use('/charging', chargingOpsRouter);
   ops.use('/incidents', incidentsOpsRouter);
   ops.use('/redistribution', redistributionOpsRouter);
+  ops.use('/simulation', simulationOpsRouter);
   ops.use('/audit', auditOpsRouter);
   ops.use(monitoringOpsRouter);
   api.use('/auth', authRouter);

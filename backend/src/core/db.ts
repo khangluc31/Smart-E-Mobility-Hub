@@ -20,6 +20,8 @@ const LOCKABLE_TABLES = {
   incident: 'incident',
   alert: 'alert',
   private_ev: 'private_ev',
+  sim_run: 'sim_run',
+  sim_recommendation: 'sim_recommendation',
 } as const;
 
 export type LockableTable = keyof typeof LOCKABLE_TABLES;
