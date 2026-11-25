@@ -18,6 +18,7 @@ const LOCKABLE_TABLES = {
   charging_request: 'charging_request',
   redistribution_task: 'redistribution_task',
   incident: 'incident',
+  alert: 'alert',
   private_ev: 'private_ev',
 } as const;
 
