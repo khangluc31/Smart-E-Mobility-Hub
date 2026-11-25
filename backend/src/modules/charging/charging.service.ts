@@ -4,7 +4,7 @@
 import type { ChargingPoint as PrismaChargingPoint, ChargingRequest } from '@prisma/client';
 import { audit } from '../../core/audit';
 import { config } from '../../core/config';
-import { db, type DbClient } from '../../core/db';
+import { db, type DbClient, type Tx } from '../../core/db';
 import { badRequest } from '../../core/errors';
 import { events } from '../../core/events';
 import { toIso } from '../../core/time';
@@ -110,10 +110,11 @@ export async function getWeights(client: DbClient = db): Promise<ChargingWeights
 export async function setWeights(
   actor: WeightsActor,
   input: ChargingWeights,
+  opts?: { tx?: Tx },
 ): Promise<ChargingWeights> {
   const after = validateWeightsInput(input);
 
-  const hubIds = await db.$transaction(async (tx) => {
+  const apply = async (tx: Tx): Promise<string[]> => {
     const beforeView = await getWeights(tx);
     const before: ChargingWeights = {
       battery: beforeView.battery,
@@ -138,7 +139,14 @@ export async function setWeights(
 
     const hubs = await tx.hub.findMany({ select: { id: true } });
     return hubs.map((h) => h.id);
-  });
+  };
+
+  if (opts?.tx) {
+    await apply(opts.tx);
+    return after;
+  }
+
+  const hubIds = await db.$transaction(apply);
 
   // Post-commit events (ARCHITECTURE §4.6)
   for (const hubId of hubIds) {
