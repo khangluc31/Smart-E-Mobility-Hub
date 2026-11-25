@@ -495,8 +495,13 @@ describe('FR-33 & BR-09 alert evaluation', () => {
     expect(openAfterNull).toHaveLength(1);
   });
 
-  it('FR-33 evaluateHub does not touch SHORTAGE or SURPLUS alerts owned by redistribution', async () => {
+  it('FR-43 UC-24 E1 evaluateHub suspends SHORTAGE and SURPLUS evaluation on a DEGRADED Hub', async () => {
     const now = new Date();
+    // Mark dorm DEGRADED so imbalance evaluation is suspended (UC-24 E1)
+    await db.hub.update({
+      where: { id: 'dorm' },
+      data: { lastTelemetryAt: new Date(now.getTime() - STALLED_MS) },
+    });
     await db.alert.createMany({
       data: [
         {

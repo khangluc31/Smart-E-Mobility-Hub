@@ -27,6 +27,7 @@ export default defineConfig({
         'src/modules/monitoring/**': { lines: 70 },
         'src/modules/notifications/**': { lines: 70 },
         'src/modules/private-evs/**': { lines: 70 },
+        'src/modules/redistribution/**': { lines: 70 },
         'src/modules/reservations/**': { lines: 70 },
         'src/telemetry/**': { lines: 70 },
       },
