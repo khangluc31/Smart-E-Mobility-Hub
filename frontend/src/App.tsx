@@ -16,6 +16,7 @@ import { HubDetail } from '@/pages/student/HubDetail';
 import { VehicleSearch } from '@/pages/student/VehicleSearch';
 import { MyReservations } from '@/pages/student/MyReservations';
 import { ParkingBooking } from '@/pages/student/ParkingBooking';
+import { Charging } from '@/pages/student/Charging';
 import { MyVehicles } from '@/pages/student/MyVehicles';
 import { Skeleton } from '@/components/ui/skeleton';
 
@@ -51,16 +52,7 @@ export function App() {
           <Route path="vehicles" element={<VehicleSearch />} />
           <Route path="reservations" element={<MyReservations />} />
           <Route path="parking" element={<ParkingBooking />} />
-          <Route
-            path="charging"
-            element={
-              <TodoPage
-                title="Charging Requests & Advance Booking"
-                area="charging module"
-                owner="M6"
-              />
-            }
-          />
+          <Route path="charging" element={<Charging />} />
           <Route path="my-vehicles" element={<MyVehicles />} />
         </Route>
       </Route>

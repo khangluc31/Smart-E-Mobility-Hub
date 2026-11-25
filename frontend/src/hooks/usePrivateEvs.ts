@@ -3,11 +3,15 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '@/lib/api';
 import { POLL_INTERVAL_MS } from '@/lib/constants';
-import { HISTORY_KEY } from '@/hooks/useReservations';
+import { HISTORY_KEY, PARKING_AVAILABILITY_KEY } from '@/hooks/useReservations';
+import { syncServerClock } from '@/hooks/useServerClock';
 import type { PrivateEvType } from '@/types/enums';
-import type { PrivateEv } from '@/types/privateEvs';
+import type { CombinedBookingResult, PrivateEv } from '@/types/privateEvs';
 
 export const PRIVATE_EVS_QUERY_KEY = ['private-evs'] as const;
+
+const CHARGING_KEY = ['charging'] as const;
+const HUBS_KEY = ['hubs'] as const;
 
 export interface CreatePrivateEvInput {
   type: PrivateEvType;
@@ -62,6 +66,41 @@ export function useRemovePrivateEv() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: PRIVATE_EVS_QUERY_KEY });
       void queryClient.invalidateQueries({ queryKey: HISTORY_KEY });
+    },
+  });
+}
+
+export interface BookParkingAndChargingInput {
+  evId: string;
+  hubId: string;
+  windowStart: string;
+  windowEnd: string;
+  targetPct: number;
+  chargeStart?: string;
+  idempotencyKey?: string;
+}
+
+export function useBookParkingAndCharging() {
+  const queryClient = useQueryClient();
+  return useMutation<CombinedBookingResult, unknown, BookParkingAndChargingInput>({
+    mutationFn: async ({ evId, idempotencyKey, ...body }) => {
+      const key = idempotencyKey ?? crypto.randomUUID();
+      const res = await api.post<CombinedBookingResult>(
+        `/private-evs/${encodeURIComponent(evId)}/book-parking-charging`,
+        body,
+        { idempotencyKey: key },
+      );
+      if (res.chargingRequest.serverNow) {
+        syncServerClock(res.chargingRequest.serverNow);
+      }
+      return res;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: PRIVATE_EVS_QUERY_KEY });
+      void queryClient.invalidateQueries({ queryKey: CHARGING_KEY });
+      void queryClient.invalidateQueries({ queryKey: HISTORY_KEY });
+      void queryClient.invalidateQueries({ queryKey: HUBS_KEY });
+      void queryClient.invalidateQueries({ queryKey: PARKING_AVAILABILITY_KEY });
     },
   });
 }

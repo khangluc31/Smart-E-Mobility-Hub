@@ -1,15 +1,21 @@
-// Student My Private EVs page (FR-25, FR-26, FR-27, NFR-05/28).
+// Student My Private EVs page (FR-25, FR-26, FR-27, FR-28, BR-14, NFR-05/08/28).
 
-import { useState } from 'react';
-import { Car, Pencil, Plus, Trash2 } from 'lucide-react';
+import { useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { Car, CheckCircle2, Pencil, PlugZap, Plus, Trash2 } from 'lucide-react';
+import { ApiError } from '@/lib/api';
+import { PARKING_MAX_WINDOW_H } from '@/lib/constants';
+import { useHubs } from '@/hooks/useHubs';
 import {
+  useBookParkingAndCharging,
   useCreatePrivateEv,
   usePrivateEvs,
   useRemovePrivateEv,
   useUpdatePrivateEv,
 } from '@/hooks/usePrivateEvs';
+import type { Alternative } from '@/types/common';
 import { PRIVATE_EV_TYPES, type PrivateEvType, type VehicleClass } from '@/types/enums';
-import type { PrivateEv } from '@/types/privateEvs';
+import type { CombinedBookingResult, PrivateEv } from '@/types/privateEvs';
 import { BatteryBar } from '@/components/common/BatteryBar';
 import { ErrorBox } from '@/components/common/ErrorBox';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -44,12 +50,58 @@ const CLASS_LABEL: Record<VehicleClass, string> = {
   CAR: 'Car',
 };
 
+function toLocalDateTimeInput(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function localInputToIso(localVal: string): string | null {
+  if (!localVal) return null;
+  const d = new Date(localVal);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
+
+function formatLocalDateTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function formatLocalTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function combinedErrorTitle(err: unknown): string {
+  if (err instanceof ApiError && err.details && typeof err.details.missing === 'string') {
+    const missing = err.details.missing;
+    if (missing === 'PARKING') return 'No parking capacity available';
+    if (missing === 'CHARGING') return 'No charging capacity available';
+  }
+  return 'Could not complete combined booking';
+}
+
 export function MyVehicles() {
   const { data: evs, isLoading, error } = usePrivateEvs();
+  const { data: hubs } = useHubs();
 
   const createMutation = useCreatePrivateEv();
   const updateMutation = useUpdatePrivateEv();
   const removeMutation = useRemovePrivateEv();
+  const combinedMutation = useBookParkingAndCharging();
+
+  const hubNamesById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const h of hubs ?? []) map.set(h.id, h.name);
+    return map;
+  }, [hubs]);
 
   // Add form state (FR-25)
   const [addType, setAddType] = useState<PrivateEvType>('E_MOTORCYCLE');
@@ -66,6 +118,98 @@ export function MyVehicles() {
 
   // Remove dialog state (FR-27)
   const [removeTarget, setRemoveTarget] = useState<PrivateEv | null>(null);
+
+  // Combined parking + charging dialog state (FR-28)
+  const [combinedTarget, setCombinedTarget] = useState<PrivateEv | null>(null);
+  const [combHubId, setCombHubId] = useState<string>('');
+  const [combWindowStart, setCombWindowStart] = useState<string>('');
+  const [combWindowEnd, setCombWindowEnd] = useState<string>('');
+  const [combTargetPct, setCombTargetPct] = useState<string>('80');
+  const [combChargeStart, setCombChargeStart] = useState<string>('');
+  const [combinedResult, setCombinedResult] = useState<CombinedBookingResult | null>(null);
+
+  const combinedIdemKeyRef = useRef<string>(crypto.randomUUID());
+  function resetCombinedIdemKey() {
+    combinedIdemKeyRef.current = crypto.randomUUID();
+  }
+
+  function openCombinedDialog(ev: PrivateEv) {
+    combinedMutation.reset();
+    resetCombinedIdemKey();
+    setCombinedResult(null);
+    setCombinedTarget(ev);
+    setCombHubId(hubs?.[0]?.id ?? '');
+    const now = Date.now();
+    setCombWindowStart(toLocalDateTimeInput(new Date(now + 15 * 60_000)));
+    setCombWindowEnd(toLocalDateTimeInput(new Date(now + 135 * 60_000)));
+    setCombTargetPct(String(Math.min(100, Math.max(80, ev.batteryPct + 10))));
+    setCombChargeStart('');
+  }
+
+  function handleCombinedAlternative(alt: Alternative) {
+    if (alt.type === 'hub' && alt.hubId) {
+      setCombHubId(alt.hubId);
+      combinedMutation.reset();
+      resetCombinedIdemKey();
+      return;
+    }
+
+    if (alt.type === 'time' && alt.start) {
+      const altStartDate = new Date(alt.start);
+      if (Number.isNaN(altStartDate.getTime())) return;
+      setCombChargeStart(toLocalDateTimeInput(altStartDate));
+
+      const curStartMs = Date.parse(localInputToIso(combWindowStart) ?? '');
+      const curEndMs = Date.parse(localInputToIso(combWindowEnd) ?? '');
+      const altStartMs = altStartDate.getTime();
+      const altEndDate = alt.end ? new Date(alt.end) : null;
+      const altEndMs = altEndDate && !Number.isNaN(altEndDate.getTime()) ? altEndDate.getTime() : NaN;
+
+      let nextStartMs = Number.isFinite(curStartMs) ? curStartMs : altStartMs;
+      let nextEndMs = Number.isFinite(curEndMs) ? curEndMs : altStartMs + 120 * 60_000;
+
+      if (altStartMs < nextStartMs) {
+        nextStartMs = altStartMs;
+      }
+      if (Number.isFinite(altEndMs) && altEndMs > nextEndMs) {
+        nextEndMs = altEndMs;
+        // Keep window within PARKING_MAX_WINDOW_H by shifting windowStart forward to alt.start if needed
+        if (nextEndMs - nextStartMs > PARKING_MAX_WINDOW_H * 3_600_000) {
+          nextStartMs = altStartMs;
+        }
+      }
+
+      setCombWindowStart(toLocalDateTimeInput(new Date(nextStartMs)));
+      setCombWindowEnd(toLocalDateTimeInput(new Date(nextEndMs)));
+      combinedMutation.reset();
+      resetCombinedIdemKey();
+    }
+  }
+
+  async function handleCombinedSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!combinedTarget) return;
+    const windowStartIso = localInputToIso(combWindowStart);
+    const windowEndIso = localInputToIso(combWindowEnd);
+    const chargeStartIso = localInputToIso(combChargeStart);
+    if (!windowStartIso || !windowEndIso) return;
+
+    try {
+      const result = await combinedMutation.mutateAsync({
+        evId: combinedTarget.id,
+        hubId: combHubId || hubs?.[0]?.id || '',
+        windowStart: windowStartIso,
+        windowEnd: windowEndIso,
+        targetPct: Number(combTargetPct),
+        ...(chargeStartIso ? { chargeStart: chargeStartIso } : {}),
+        idempotencyKey: combinedIdemKeyRef.current,
+      });
+      resetCombinedIdemKey();
+      setCombinedResult(result);
+    } catch {
+      // Displayed via ErrorBox
+    }
+  }
 
   async function handleAddSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -289,10 +433,10 @@ export function MyVehicles() {
                       size="sm"
                       variant="secondary"
                       className="min-h-9 w-full sm:w-auto"
-                      disabled
-                      title="Combined parking + charging booking is coming soon"
+                      onClick={() => openCombinedDialog(ev)}
                     >
-                      Book parking + charging (coming soon)
+                      <PlugZap className="h-3.5 w-3.5" />
+                      <span>Book parking + charging</span>
                     </Button>
                   </div>
                 </CardContent>
@@ -432,6 +576,224 @@ export function MyVehicles() {
               {removeMutation.isPending ? 'Removing…' : 'Yes, remove'}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Combined Parking + Charging Dialog (FR-28, BR-14) */}
+      <Dialog
+        open={Boolean(combinedTarget)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setCombinedTarget(null);
+            setCombinedResult(null);
+          }
+        }}
+      >
+        <DialogContent className="max-w-[calc(100vw-2rem)] sm:max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <PlugZap className="h-4 w-4 shrink-0" />
+              <span>Book parking + charging</span>
+            </DialogTitle>
+            {combinedTarget && (
+              <DialogDescription asChild>
+                <div className="flex flex-wrap items-center gap-2 pt-1 text-xs text-muted-foreground">
+                  <span className="font-medium text-foreground">{combinedTarget.label}</span>
+                  <Badge variant="secondary">{CLASS_LABEL[combinedTarget.vehicleClass]}</Badge>
+                  <BatteryBar pct={combinedTarget.batteryPct} />
+                </div>
+              </DialogDescription>
+            )}
+          </DialogHeader>
+
+          {combinedResult ? (
+            <div className="space-y-4">
+              <div className="rounded-md border border-emerald-300 bg-emerald-50 p-3 text-sm text-emerald-950 space-y-2">
+                <p className="font-semibold flex items-center gap-1.5">
+                  <CheckCircle2 className="h-4 w-4 text-emerald-700 shrink-0" />
+                  <span>Parking &amp; charging booked together</span>
+                </p>
+                <p className="text-xs">
+                  <span className="font-medium">Booking group: </span>
+                  <span className="font-mono break-all">{combinedResult.bookingGroupId}</span>
+                </p>
+                <div className="text-xs space-y-1 pt-1 border-t border-emerald-200">
+                  <p>
+                    <span className="font-medium">Hub: </span>
+                    {hubNamesById.get(combinedResult.parkingReservation.hubId) ??
+                      combinedResult.parkingReservation.hubId}
+                  </p>
+                  <p>
+                    <span className="font-medium">Parking space: </span>
+                    <span className="font-mono">
+                      {combinedResult.parkingReservation.parkingSpaceId}
+                    </span>{' '}
+                    ({formatLocalDateTime(combinedResult.parkingReservation.windowStart)} –{' '}
+                    {formatLocalTime(combinedResult.parkingReservation.windowEnd)})
+                  </p>
+                  <p>
+                    <span className="font-medium">Charging point: </span>
+                    <span className="font-mono">
+                      {combinedResult.chargingRequest.chargingPointId ?? 'Assigned'}
+                    </span>
+                    {combinedResult.chargingRequest.slotStart &&
+                      combinedResult.chargingRequest.slotEnd && (
+                        <>
+                          {' '}
+                          ({formatLocalDateTime(combinedResult.chargingRequest.slotStart)} –{' '}
+                          {formatLocalTime(combinedResult.chargingRequest.slotEnd)})
+                        </>
+                      )}
+                  </p>
+                </div>
+              </div>
+
+              <DialogFooter className="flex-col-reverse sm:flex-row gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="min-h-9"
+                  onClick={() => {
+                    setCombinedTarget(null);
+                    setCombinedResult(null);
+                  }}
+                >
+                  Close
+                </Button>
+                <Button asChild variant="outline" className="min-h-9">
+                  <Link to="/app/reservations">View reservations</Link>
+                </Button>
+                <Button asChild className="min-h-9">
+                  <Link to="/app/charging">View charging</Link>
+                </Button>
+              </DialogFooter>
+            </div>
+          ) : (
+            <form onSubmit={handleCombinedSubmit} className="space-y-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="comb-hub">Hub</Label>
+                <Select
+                  value={combHubId || hubs?.[0]?.id || ''}
+                  onValueChange={(v) => {
+                    setCombHubId(v);
+                    combinedMutation.reset();
+                    resetCombinedIdemKey();
+                  }}
+                >
+                  <SelectTrigger id="comb-hub" className="w-full min-h-9">
+                    <SelectValue placeholder="Choose a Hub" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(hubs ?? []).map((h) => (
+                      <SelectItem key={h.id} value={h.id}>
+                        {h.name}
+                        {h.degraded ? ' (Degraded)' : ''}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="comb-start">Parking start</Label>
+                  <Input
+                    id="comb-start"
+                    type="datetime-local"
+                    value={combWindowStart}
+                    onChange={(e) => {
+                      setCombWindowStart(e.target.value);
+                      combinedMutation.reset();
+                      resetCombinedIdemKey();
+                    }}
+                    className="min-h-9"
+                    required
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="comb-end">Parking end</Label>
+                  <Input
+                    id="comb-end"
+                    type="datetime-local"
+                    value={combWindowEnd}
+                    onChange={(e) => {
+                      setCombWindowEnd(e.target.value);
+                      combinedMutation.reset();
+                      resetCombinedIdemKey();
+                    }}
+                    className="min-h-9"
+                    required
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Parking window max {PARKING_MAX_WINDOW_H} hours. Both parking and charging must
+                succeed together (all-or-nothing).
+              </p>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="comb-target">Target battery (%)</Label>
+                  <Input
+                    id="comb-target"
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={combTargetPct}
+                    onChange={(e) => {
+                      setCombTargetPct(e.target.value);
+                      combinedMutation.reset();
+                      resetCombinedIdemKey();
+                    }}
+                    className="min-h-9"
+                    required
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="comb-charge-start">Charge start (optional)</Label>
+                  <Input
+                    id="comb-charge-start"
+                    type="datetime-local"
+                    value={combChargeStart}
+                    onChange={(e) => {
+                      setCombChargeStart(e.target.value);
+                      combinedMutation.reset();
+                      resetCombinedIdemKey();
+                    }}
+                    className="min-h-9"
+                  />
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Defaults to parking start; must be in the future and inside the parking window.
+              </p>
+
+              {Boolean(combinedMutation.error) && (
+                <ErrorBox
+                  error={combinedMutation.error}
+                  title={combinedErrorTitle(combinedMutation.error)}
+                  onSelectAlternative={handleCombinedAlternative}
+                />
+              )}
+
+              <DialogFooter className="flex-col-reverse sm:flex-row gap-2 pt-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="min-h-9"
+                  onClick={() => setCombinedTarget(null)}
+                  disabled={combinedMutation.isPending}
+                >
+                  Cancel
+                </Button>
+                <Button type="submit" className="min-h-9" disabled={combinedMutation.isPending}>
+                  {combinedMutation.isPending ? 'Booking…' : 'Book parking + charging'}
+                </Button>
+              </DialogFooter>
+            </form>
+          )}
         </DialogContent>
       </Dialog>
     </div>
