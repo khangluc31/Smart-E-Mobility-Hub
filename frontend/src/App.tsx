@@ -6,7 +6,7 @@ import { RequireAuth } from '@/components/layout/RequireAuth';
 import { RequireRole } from '@/components/layout/RequireRole';
 import { StudentLayout } from '@/components/layout/StudentLayout';
 import { OperatorLayout } from '@/components/layout/OperatorLayout';
-import { TodoPage } from '@/components/common/TodoPage';
+import { SimulationLayout } from '@/components/layout/SimulationLayout';
 import { NotFound } from '@/components/common/NotFound';
 import { Login } from '@/pages/Login';
 import { Register } from '@/pages/Register';
@@ -24,6 +24,11 @@ import { Incidents } from '@/pages/operator/Incidents';
 import { ChargingQueue } from '@/pages/operator/ChargingQueue';
 import { Redistribution } from '@/pages/operator/Redistribution';
 import { DemoControls } from '@/pages/operator/DemoControls';
+import { Scenarios } from '@/pages/simulation/Scenarios';
+import { Runs } from '@/pages/simulation/Runs';
+import { RunDetail } from '@/pages/simulation/RunDetail';
+import { Compare } from '@/pages/simulation/Compare';
+import { Recommendations } from '@/pages/simulation/Recommendations';
 import { Skeleton } from '@/components/ui/skeleton';
 
 function HomeRedirect() {
@@ -72,17 +77,22 @@ export function App() {
             <Route path="incidents" element={<Incidents />} />
             <Route path="charging" element={<ChargingQueue />} />
             <Route path="redistribution" element={<Redistribution />} />
-            <Route
-              path="simulation"
-              element={
-                <TodoPage
-                  title="What-if Simulation"
-                  area="snapshot simulation & recommendations"
-                  owner="M2"
-                />
-              }
-            />
+            <Route path="simulation" element={<Navigate to="/sim" replace />} />
             <Route path="demo" element={<DemoControls />} />
+          </Route>
+        </Route>
+      </Route>
+
+      {/* What-if Simulation sandbox workspace (D-24, BR-11, FR-61) */}
+      <Route path="/sim" element={<RequireAuth />}>
+        <Route element={<RequireRole role="OPERATOR" />}>
+          <Route element={<SimulationLayout />}>
+            <Route index element={<Navigate to="/sim/scenarios" replace />} />
+            <Route path="scenarios" element={<Scenarios />} />
+            <Route path="runs" element={<Runs />} />
+            <Route path="runs/:runId" element={<RunDetail />} />
+            <Route path="compare" element={<Compare />} />
+            <Route path="recommendations" element={<Recommendations />} />
           </Route>
         </Route>
       </Route>
