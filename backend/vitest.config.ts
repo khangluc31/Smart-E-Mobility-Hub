@@ -29,6 +29,7 @@ export default defineConfig({
         'src/modules/private-evs/**': { lines: 70 },
         'src/modules/redistribution/**': { lines: 70 },
         'src/modules/reservations/**': { lines: 70 },
+        'src/modules/simulation/**': { lines: 70 },
         'src/telemetry/**': { lines: 70 },
       },
     },
