@@ -1,6 +1,7 @@
-// Charging DTOs (CONTRACTS §1, §8.2).
-// Imports only ./enums and ./hubs so backend and frontend copies stay byte-identical.
+// Charging DTOs (CONTRACTS §1, §8.1, §8.2).
+// Imports only ./common, ./enums and ./hubs so backend and frontend copies stay byte-identical.
 
+import type { Alternative } from './common';
 import type {
   ChargingEndReason,
   ChargingMode,
@@ -99,3 +100,46 @@ export type SubmitChargingRequest =
       targetPct: number;
       neededBy?: string;
     };
+
+export interface ChargingAvailability {
+  available: boolean;
+  slotEnd: string;
+  suggestions: Alternative[];
+}
+
+export interface BookAdvanceChargingRequest {
+  privateEvId: string;
+  hubId: string;
+  slotStart: string;
+  targetPct: number;
+}
+
+export interface DispatchResult {
+  created: ChargingRequestView[];
+}
+
+export type FleetDispatchRequest =
+  | {
+      rentalVehicleId: string;
+      hubId: string;
+      targetPct?: number;
+    }
+  | {
+      hubId: string;
+      allLowBattery: true;
+      targetPct?: number;
+    };
+
+export const CHARGING_OVERRIDE_ACTIONS = ['PROMOTE', 'DEFER', 'SWAP', 'CANCEL'] as const;
+export type ChargingOverrideAction = (typeof CHARGING_OVERRIDE_ACTIONS)[number];
+
+export interface ChargingOverrideRequest {
+  action: ChargingOverrideAction;
+  requestId: string;
+  otherRequestId?: string;
+  reason: string;
+}
+
+export interface ChargingOverrideResult {
+  entries: ChargingQueueEntry[];
+}
