@@ -213,7 +213,7 @@ Priority: **M** = Must, **S** = Should, **C** = Could. Acceptance = what a test 
 | FR-48 | Priority weights | S | Operator sets numeric non-negative weights (not all zero); queue re-ranked ≤ 5 s; invalid → 400; audit row. | UC-26 |
 | FR-49 | Schedule generation | M | After any queue change, schedule across all points regenerated ≤ 5 s; never two overlapping sessions on one point. | UC-27 |
 | FR-50 | Class match | M | CAR requests only to CAR points; MOTORCYCLE only to MOTORCYCLE points. | UC-27 |
-| FR-51 | Fleet charging dispatch | M | Operator queues an unreserved Rental vehicle with battery < 20% at its current Hub; reserved vehicle or wrong Hub → 400. | UC-27 |
+| FR-51 | Fleet charging dispatch | M | Operator queues an unreserved Rental vehicle with battery < 20% at its current Hub; wrong Hub → 400; reserved vehicle or battery ≥ 20% → 409 NOT_ELIGIBLE. | UC-27 |
 | FR-52 | Manual override | M | Promote / defer / swap / cancel **waiting** entries only, reason ≥ 10 chars; running session or advance-booked slot → 409; audit row; affected user notified. | UC-28 |
 | FR-53 | Snapshot | M | Copy of all Hubs/resources/reservations/queue ≤ 5 s without blocking live writes. | UC-30 |
 | FR-54 | Scenario config | M | Templates (a) Metro surge, (b) Hub parking full, (c) charging demand spike, (d) partial point outage, (e) vehicle concentration/shortage; numeric params validated (no negatives, horizon ≤ 24 h, required fields). | UC-29 |
