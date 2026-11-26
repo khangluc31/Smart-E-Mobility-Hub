@@ -113,6 +113,7 @@ flowchart TD
   reservations --> notifications
   reservations --> charging
   charging --> notifications
+  charging --> hubs
   privateEvs[private-evs] --> reservations
   privateEvs --> charging
   incidents --> reservations
@@ -155,7 +156,7 @@ export async function lockRow(tx: Tx, table: LockableTable, id: string): Promise
 ```
 
 - Every write that checks-then-changes state runs in `db.$transaction(async (tx) => …)`.
-- **Lock order** (prevents deadlocks): vehicle rows (private_ev / rental_vehicle) → parking_space → charging_point → booking rows (vehicle_reservation / parking_reservation → charging_request). Jobs follow the same order.
+- **Lock order** (prevents deadlocks): `private_ev` / `rental_vehicle` → `parking_space` → `charging_point` → booking rows (`vehicle_reservation` / `parking_reservation` → `charging_request`) → `incident` / `alert` / `redistribution_task` / `sim_recommendation`. Jobs follow the same order.
 - Picking "any free resource" uses `FOR UPDATE SKIP LOCKED LIMIT 1` via `$queryRaw`, so two concurrent requests take different resources or the loser finds none (BR-10).
 - DB constraints (§5.2) are the last guard. `core/errors.ts` maps Postgres `23505` (Prisma `P2002`) and `23P01` (exclusion violation) to `409 RESOURCE_TAKEN` unless the caller maps them to something more specific.
 
@@ -401,7 +402,7 @@ With 50 parallel calls, the first to lock the row commits; the other 49 wait, th
 ### 6.3 Parking (FR-14–18, PUBLIC pool)
 
 - **Free count for a window (FR-14):** count PUBLIC spaces of the class at the Hub, status ≠ UNAVAILABLE, with no CONFIRMED/ACTIVE reservation overlapping `[start, end)`.
-- **Reserve (FR-15):** pick one such space with `FOR UPDATE SKIP LOCKED LIMIT 1`; insert reservation (`expiresAt = windowStart + hold`). None → 409 + alternative Hubs. The exclusion constraint is the final guard.
+- **Reserve (FR-15):** pick one such space with `FOR UPDATE SKIP LOCKED LIMIT 1`; insert reservation (`expiresAt = min(windowStart + hold, windowEnd)`). None → 409 + alternative Hubs. The exclusion constraint is the final guard.
 - **Claim:** `POST /parking-reservations/:id/claim` allowed from window start until `expiresAt` → ACTIVE, space OCCUPIED.
 - **`reservations.tick` job:** at `windowStart` CONFIRMED → space RESERVED; past `expiresAt` and unclaimed → EXPIRED, space FREE, notify (FR-18); past `windowEnd` and ACTIVE → COMPLETED, space FREE.
 - **Expiry of vehicle holds:** same job: `expiresAt < now` and CONFIRMED → EXPIRED, vehicle AVAILABLE, notify (BR-03).

@@ -181,7 +181,7 @@ The same `alternativeHubs()` service function fills `error.alternatives` for `HU
 | `POST /parking-reservations` **(idem)** | S | `{ hubId, vehicleClass, privateEvId?, windowStart, windowEnd }` — start ≥ now − 1 min, end > start, length ≤ 12 h; if `privateEvId` given, its class must equal `vehicleClass` | `201 ParkingReservation` (CONFIRMED) | 400; 409 `NO_CAPACITY` (+ `alternatives`), `CLASS_MISMATCH` | FR-15, BR-10, BR-13 |
 | `POST /parking-reservations/:id/cancel` | S | – | `200 ParkingReservation` (CANCELLED) | 404; 409 `INVALID_STATE_TRANSITION` | FR-16 |
 | `PATCH /parking-reservations/:id` | S | `{ windowStart, windowEnd }` | `200 ParkingReservation` (may move to another free space of the same class/Hub) | 404; 409 `NO_CAPACITY` — original unchanged | FR-17 |
-| `POST /parking-reservations/:id/claim` | S | – | `200 ParkingReservation` (ACTIVE, space OCCUPIED) | 404; 409 `HOLD_EXPIRED`, 409 too early (`details.opensAt`) | FR-18 |
+| `POST /parking-reservations/:id/claim` | S | – | `200 ParkingReservation` (ACTIVE, space OCCUPIED) | 404; 409 `HOLD_EXPIRED`, 409 `NOT_ELIGIBLE` too early (`details.opensAt`) | FR-18 |
 | `POST /parking-reservations/:id/leave` | S | – | `200 ParkingReservation` (COMPLETED, space FREE) | 404; 409 | FR-18 (end of window early) |
 
 Expiry and window end are handled by the `reservations.tick` job (no endpoint).
